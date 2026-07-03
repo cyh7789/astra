@@ -81,7 +81,7 @@ describe("ChatSession 持久化與跨終端接續", () => {
     const llm: LlmClient = {
       async complete(system, user) {
         seen.push({ system, user });
-        if (system.includes("對話摘要器")) {
+        if (system.includes("conversation condenser")) {
           return '{"digest":"聊了週末出遊規劃","openThreads":["訂宜蘭民宿還沒訂"]}';
         }
         return JSON.stringify({ action: "reply", text: "好的" });
@@ -102,14 +102,14 @@ describe("ChatSession 持久化與跨終端接續", () => {
     const r = await ChatSession.resume(store, llm, DEMO_USER, NOW, opts);
     await r!.send("繼續", NOW);
     const lastChat = seen.filter((c) => c.system.includes("ASTRA")).at(-1)!;
-    expect(lastChat.user).toContain("先前對話摘要：聊了週末出遊規劃");
-    expect(lastChat.user).toContain("未完成：訂宜蘭民宿還沒訂");
+    expect(lastChat.user).toContain("Earlier summary: 聊了週末出遊規劃");
+    expect(lastChat.user).toContain("Open: 訂宜蘭民宿還沒訂");
   });
 
   it("萃取寫回：跨場景主題自動帶 sourceContext，餵得進交接浮現", async () => {
     const llm: LlmClient = {
       async complete(system) {
-        if (system.includes("記憶萃取器")) {
+        if (system.includes("memory extractor")) {
           return '[{"memoryType":"episodic","content":"到家後要澆陽台的花","context":"home","importance":0.6}]';
         }
         return JSON.stringify({ action: "reply", text: "好的" });

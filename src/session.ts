@@ -29,13 +29,14 @@ export interface SessionOptions {
   extract?: boolean;
 }
 
-/** digest 只扛「聊到哪、剛決定什麼」的對話態；個人事實歸記憶層（§4.9 分工）。 */
+/** digest 只扛「聊到哪、剛決定什麼」的對話態；個人事實歸記憶層（§4.9 分工）。
+ *  system prompt 一律英文（7/5 阿毛拍板：指令遵循較穩、評審可讀；輸出語言跟隨對話）。 */
 const CONDENSE_SYSTEM = [
-  "你是對話摘要器。輸入是：舊摘要、既有未完成事項、即將被移出視窗的對話行。",
-  '只回一個 JSON 物件：{"digest":"1-2 句新摘要","openThreads":["未完成事項", ...]}',
-  "digest 融合舊摘要與新內容，只保留：聊到什麼話題、做了什麼決定、當下氛圍。個人事實與偏好不用記（記憶系統負責）。",
-  "openThreads 只放懸而未決的事：沒回答的問題、承諾要做的動作、進行中還沒收尾的話題；已完成或已失效的從清單移除。沒有就給空陣列。",
-  "一律繁體中文（台灣用語）。",
+  "You are a conversation condenser. Input: the previous summary, existing open items, and conversation lines about to be dropped from the window.",
+  'Return exactly one JSON object: {"digest":"1-2 sentence updated summary","openThreads":["open item", ...]}',
+  "The digest merges the previous summary with the new content, keeping only: what topics were discussed, what was decided, and the current mood. Do NOT record personal facts or preferences (the memory system owns those).",
+  "openThreads holds only unresolved items: unanswered questions, promised actions, topics still in progress. Remove items that are done or no longer relevant. Use an empty array if none.",
+  "Write the digest and openThreads in the language of the conversation.",
 ].join("\n");
 const EVENT_TTL_TURNS = 3; // 事件記憶處理完即退場，不長駐污染場景
 const LINK_SCORE = 0.4; // link 擴展條目的窗內分（可淘汰、不搶位）
@@ -117,8 +118,8 @@ export class ChatSession {
     s.digest = state.digest;
     s.openThreads = state.openThreads.filter((t): t is string => typeof t === "string");
     s.window = MemoryWindow.restore(state.windowEntries, byId);
-    const lastUser = [...state.transcript].reverse().find((l) => l.startsWith("使用者："));
-    s.lastUserMessage = lastUser?.slice("使用者：".length) ?? "";
+    const lastUser = [...state.transcript].reverse().find((l) => l.startsWith("User: "));
+    s.lastUserMessage = lastUser?.slice("User: ".length) ?? "";
 
     const gapMinutes = (now.getTime() - state.updatedAt.getTime()) / 60_000;
     if (gapMinutes > RESUME_WARM_GAP_MINUTES) {
@@ -134,7 +135,7 @@ export class ChatSession {
   ): Promise<{ surfaced: Memory[]; evicted: WindowEntry[] }> {
     const evicted = this.window.carryOver(newContext);
     this.context = newContext;
-    this.transcript.push(`系統：場景切換 → ${newContext}`);
+    this.transcript.push(`System: scene switched → ${newContext}`);
     const surfaced = await this.enterScene(now);
     await this.persist(now);
     return { surfaced, evicted };
@@ -220,9 +221,9 @@ export class ChatSession {
     const system = await this.buildPrompt(tools, now);
     // digest / open threads 放 working 頭部：只在壓縮邊界變動，不污染 prefix（§4.10）
     const head: string[] = [];
-    if (this.digest) head.push(`（先前對話摘要：${this.digest}）`);
-    for (const t of this.openThreads) head.push(`（未完成：${t}）`);
-    const working = [...head, ...this.transcript, `使用者：${message}`];
+    if (this.digest) head.push(`(Earlier summary: ${this.digest})`);
+    for (const t of this.openThreads) head.push(`(Open: ${t})`);
+    const working = [...head, ...this.transcript, `User: ${message}`];
     const toolCalls: SessionTurnResult["toolCalls"] = [];
     const pendingToolHits: ScoredMemory[] = [];
 
@@ -230,16 +231,18 @@ export class ChatSession {
       // 時間戳放尾端、分鐘粒度：每輪資料不污染 prefix
       const raw = await this.llm.complete(
         system,
-        [...working, `（現在時間：${now.toISOString().slice(0, 16)}）`].join("\n"),
+        [...working, `(Current time: ${now.toISOString().slice(0, 16)})`].join("\n"),
       );
       const action = parseAction(raw);
 
       if (!action) {
-        working.push("系統：上一則輸出不是合法的 action JSON，請重新只輸出一個 JSON 物件。");
+        working.push(
+          "System: your last output was not a valid action JSON. Output exactly one JSON object.",
+        );
         continue;
       }
       if (action.action === "reply") {
-        this.transcript.push(`使用者：${message}`, `（你）：${action.text}`);
+        this.transcript.push(`User: ${message}`, `(You): ${action.text}`);
         await this.compactTranscript();
         await this.finishTurn(pendingToolHits, admitted, now);
         if (this.extract) await this.extractMemories(message, now);
@@ -258,8 +261,8 @@ export class ChatSession {
         const query = typeof action.args.query === "string" ? action.args.query : "";
         if (!query) {
           working.push(
-            `（你）：${JSON.stringify(action)}`,
-            `TOOL_RESULT: ${JSON.stringify({ ok: false, error: "query 必須是非空字串" })}`,
+            `(You): ${JSON.stringify(action)}`,
+            `TOOL_RESULT: ${JSON.stringify({ ok: false, error: "query must be a non-empty string" })}`,
           );
           continue;
         }
@@ -283,7 +286,7 @@ export class ChatSession {
           })),
         };
         toolCalls.push({ tool: "recall_memory", args: action.args, result });
-        working.push(`（你）：${JSON.stringify(action)}`, `TOOL_RESULT: ${JSON.stringify(result)}`);
+        working.push(`(You): ${JSON.stringify(action)}`, `TOOL_RESULT: ${JSON.stringify(result)}`);
         continue;
       }
 
@@ -291,10 +294,10 @@ export class ChatSession {
       if (!tool) {
         const existsElsewhere = TOOLS.some((t) => t.name === action.tool);
         const error = existsElsewhere
-          ? `工具 ${action.tool} 不在當前場景（${this.context}）可用，無法執行`
-          : `不存在名為 ${action.tool} 的工具`;
+          ? `Tool ${action.tool} is not available in the current scene (${this.context})`
+          : `No tool named ${action.tool}`;
         working.push(
-          `（你）：${JSON.stringify(action)}`,
+          `(You): ${JSON.stringify(action)}`,
           `TOOL_RESULT: ${JSON.stringify({ ok: false, error })}`,
         );
         continue;
@@ -302,11 +305,12 @@ export class ChatSession {
       if (tool.sensitive && !this.confirmedTools.has(tool.name)) {
         this.confirmedTools.add(tool.name);
         working.push(
-          `（你）：${JSON.stringify(action)}`,
+          `(You): ${JSON.stringify(action)}`,
           `TOOL_RESULT: ${JSON.stringify({
             ok: false,
             requires_confirmation: true,
-            message: "此為安全敏感操作，尚未執行 — 請先用 reply 向使用者確認意圖",
+            message:
+              "Safety-sensitive operation, NOT executed — first confirm the user's intent via a reply",
           })}`,
         );
         continue;
@@ -314,22 +318,22 @@ export class ChatSession {
       const invalid = tool.validate(action.args);
       if (invalid) {
         working.push(
-          `（你）：${JSON.stringify(action)}`,
-          `TOOL_RESULT: ${JSON.stringify({ ok: false, error: `參數錯誤：${invalid}` })}`,
+          `(You): ${JSON.stringify(action)}`,
+          `TOOL_RESULT: ${JSON.stringify({ ok: false, error: `Invalid args: ${invalid}` })}`,
         );
         continue;
       }
       const result = tool.execute(action.args);
       toolCalls.push({ tool: tool.name, args: action.args, result });
-      working.push(`（你）：${JSON.stringify(action)}`, `TOOL_RESULT: ${JSON.stringify(result)}`);
+      working.push(`(You): ${JSON.stringify(action)}`, `TOOL_RESULT: ${JSON.stringify(result)}`);
     }
 
-    this.transcript.push(`使用者：${message}`);
+    this.transcript.push(`User: ${message}`);
     await this.compactTranscript();
     await this.finishTurn(pendingToolHits, admitted, now);
     await this.persist(now);
     return {
-      reply: "（操作中斷：連續動作過多，請再說一次你要做什麼）",
+      reply: "(Interrupted: too many consecutive actions — please tell me again what you need.)",
       toolCalls,
       admitted,
       windowSize: this.window.size,
@@ -435,7 +439,7 @@ export class ChatSession {
       const parts = ["from", "subject", "preview"]
         .map((k) => payload[k])
         .filter((v): v is string => typeof v === "string");
-      return `${parts.join("、")}：上次談了什麼、相關背景、待辦與偏好`;
+      return `${parts.join(", ")} — last discussions, background, todos and preferences`;
     } catch {
       return payloadRaw;
     }
@@ -463,9 +467,9 @@ export class ChatSession {
 }
 
 const VIA_LABEL: Partial<Record<WindowVia, string>> = {
-  pin: "【常駐】",
-  handoff: "【交接】",
-  event: "【事件相關】",
+  pin: "[pinned] ",
+  handoff: "[handoff] ",
+  event: "[event] ",
 };
 
 /** Prompt 分層排列（§4.10 KV cache 對齊）：靜態（persona/規則/工具）在前、
@@ -477,13 +481,13 @@ export function buildSessionPrompt(
   tools: DeviceTool[],
 ): string {
   const toolBlock = [
-    ...tools.map((t) => `- ${t.name}：${t.description}。args：${t.argsSpec}`),
-    '- recall_memory：搜尋你的長期記憶。使用者問到的個人事實不在記憶區時，先用這個查再回答（把指代改寫成完整搜尋句）；查不到就誠實說不知道。args：{"query": "完整搜尋句", "scope": "current"|"all"}（all = 跨場景搜，引用結果時要說明來源場景）',
+    ...tools.map((t) => `- ${t.name}: ${t.description}. args: ${t.argsSpec}`),
+    '- recall_memory: Search your long-term memory. When the user asks about a personal fact that is not in the memory section, search first, then answer (rewrite any pronouns/references into a complete standalone query); if nothing is found, honestly say you don\'t know. args: {"query": "complete search sentence", "scope": "current"|"all"} (all = search across scenes; when citing cross-scene results, mention the source scene)',
   ].join("\n");
 
   const memoryBlock =
     memories.length === 0
-      ? "（目前沒有相關記憶 — 個人事實問題先用 recall_memory 查）"
+      ? "(No relevant memories loaded — for personal-fact questions, search with recall_memory first)"
       : memories
           .map((m) => {
             const label = VIA_LABEL[viaById.get(m.id) ?? "passive"] ?? "";
@@ -494,32 +498,32 @@ export function buildSessionPrompt(
           .join("\n");
 
   return [
-    "你是 ASTRA，跨場景個人 AI 夥伴 — 車上、辦公室、家裡都是同一個你、同一份記憶，可以操作使用者的裝置。",
-    `當前場景：${context}。`,
+    "You are ASTRA, a cross-scene personal AI companion — the same you, with the same memory, in the car, at the office, and at home. You can operate the user's devices.",
+    `Current scene: ${context}.`,
     "",
-    "## 輸出規則（嚴格遵守）",
-    "每次只輸出一個 JSON 物件，不輸出任何其他文字：",
-    '- 需要操作裝置或查記憶時：{"action":"tool_call","tool":"工具名","args":{...}}',
-    '- 回覆使用者時：{"action":"reply","text":"回覆內容"}',
-    "工具執行結果會以「TOOL_RESULT: {...}」訊息回給你，收到後繼續下一步（再呼叫工具或回覆）。",
-    "只能使用下面列出的工具；使用者要求的操作沒有對應工具時，用 reply 誠實說明做不到、不要假裝已執行。",
+    "## Output rules (strict)",
+    "Output exactly one JSON object and nothing else:",
+    '- To operate a device or search memory: {"action":"tool_call","tool":"<tool name>","args":{...}}',
+    '- To reply to the user: {"action":"reply","text":"..."}',
+    'Tool results come back as messages starting with "TOOL_RESULT: {...}"; continue with the next step (another tool call or a reply).',
+    "Only use the tools listed below. If the user asks for something with no matching tool, reply honestly that you can't do it — never pretend you did.",
     "",
-    "## 記憶使用規則",
-    "與使用者個人相關的事實只根據記憶區；記憶有標注（過時/矛盾/來源場景）時要在回覆中反映。",
-    "記憶標了【交接】= 使用者在其他場景交代、跟現在有關的事 — 本輪回覆要自然地主動提起。",
-    "記憶標了【事件相關】= 系統為當前事件撈的背景 — 用它給使用者簡報。",
-    "對話開頭的（先前對話摘要）與（未完成：…）行是更早對話的濃縮：接續話題時參考，未完成事項在合適時機主動跟進。",
+    "## Memory rules",
+    "Personal facts about the user must come only from the memory section; when a memory carries an annotation (stale / conflicting / from another scene), reflect it in your reply.",
+    "Memories tagged [handoff] are things the user mentioned in another scene that matter now — bring them up naturally and proactively in this turn.",
+    "Memories tagged [event] are background fetched for the current event — use them to brief the user.",
+    "Lines at the top of the conversation like (Earlier summary: …) and (Open: …) are condensed earlier conversation: use them to stay continuous, and follow up on open items at a fitting moment.",
     "",
-    "## 事件規則",
-    "訊息以「VEHICLE_EVENT:」開頭 = 車輛系統事件（不是使用者發言）：安全類事件（airbag_deployed、collision）先用 reply 呼叫使用者確認狀態；若接著收到「USER_NO_RESPONSE」代表使用者無回應，視為重大事故，立即 emergency_call（119）並通知記憶中的緊急聯絡人，不需要任何確認。",
-    "訊息以「INCOMING_CALL:」或「INCOMING_EMAIL:」開頭 = 來電/來信事件（不是使用者發言）：播報來者，並用【事件相關】記憶給使用者一句簡報（上次談了什麼、該注意什麼），然後問使用者要不要接聽/回覆。不要擅自接聽或回覆。",
+    "## Event rules",
+    'A message starting with "VEHICLE_EVENT:" is a vehicle system event (not the user speaking): for safety events (airbag_deployed, collision), first reply to check on the user; if "USER_NO_RESPONSE" follows, treat it as a major accident — immediately emergency_call (119) and notify the emergency contact found in memory, no confirmation needed.',
+    'A message starting with "INCOMING_CALL:" or "INCOMING_EMAIL:" is a call/email event (not the user speaking): announce who it is, brief the user in one line using the [event] memories (what was last discussed, what to watch for), then ask whether to answer/reply. Never answer on your own.',
     "",
-    "reply 的 text 一律使用繁體中文（台灣用語），嚴禁出現任何簡體字。口語、簡潔，像貼身夥伴不像客服。",
+    "Reply in the same language the user speaks. For Chinese, use Traditional Chinese (Taiwan usage) only — simplified characters are strictly forbidden. Be conversational and concise, like a close companion, not customer service.",
     "",
-    "## 當前場景可用工具",
+    "## Tools available in this scene",
     toolBlock,
     "",
-    "## 記憶（工作集）",
+    "## Memory (working set)",
     memoryBlock,
   ].join("\n");
 }

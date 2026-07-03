@@ -43,16 +43,16 @@ describe("buildSystemPrompt", () => {
     ]);
     expect(p).toContain("不吃辣");
     expect(p).toContain("可能已過時");
-    expect(p).toContain("當前場景：home");
+    expect(p).toContain("Current scene: home");
   });
 
   it("adds conflict confirmation rule only when conflicts exist", () => {
     const without = buildSystemPrompt("home", NOW, [guarded({})]);
-    expect(without).not.toContain("向使用者確認");
+    expect(without).not.toContain("confirm with the user");
     const withConflict = buildSystemPrompt("home", NOW, [
       guarded({ conflictsWith: ["some-id"], annotations: ["與記憶「…」矛盾"] }),
     ]);
-    expect(withConflict).toContain("向使用者確認");
+    expect(withConflict).toContain("confirm with the user");
   });
 });
 
@@ -97,7 +97,7 @@ describe("AstraAgent.chat", () => {
     const mockLlm: LlmClient = {
       async complete(system, user) {
         calls.push({ system, user });
-        if (system.includes("記憶萃取器")) {
+        if (system.includes("memory extractor")) {
           return '[{"memoryType":"episodic","content":"明天要先去加油","context":"driving","importance":0.7,"expiresInHours":24}]';
         }
         return "好，明天早上提醒你去建國路中油加油。";
