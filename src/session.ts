@@ -14,7 +14,10 @@ import { TOOLS, toolsForContext } from "./tools.js";
  *  PoC 範圍：不含萃取寫回、session 持久化、digest、open threads。 */
 
 const MAX_TURNS = 6;
-const TRANSCRIPT_LIMIT = 12; // 保留最近 N 則對話行
+/** transcript 高水位批次壓縮：逐則滑動每輪都毀 prefix cache，
+ *  批次丟（滿 24 砍到 12）讓失效變成低頻計畫性事件。被丟段折進 digest = 正式版（§4.9/4.10）。 */
+const TRANSCRIPT_HIGH_WATER = 24;
+const TRANSCRIPT_KEEP = 12;
 const EVENT_TTL_TURNS = 3; // 事件記憶處理完即退場，不長駐污染場景
 const LINK_SCORE = 0.4; // link 擴展條目的窗內分（可淘汰、不搶位）
 const SHORT_QUERY_CHARS = 10; // 被動空手 + 短訊息 → 併前句重試（Zep past-two-messages）
@@ -128,14 +131,20 @@ export class ChatSession {
     }
     await this.expandLinks(admitted, now);
 
-    // 工具迴圈（harness 同 ToolAgent；system prompt 每步重算 → tool 撈進窗的記憶下一步就可見）
+    // 工具迴圈（harness 同 ToolAgent）。system 整輪固定（KV cache prefix 穩定）：
+    // tool 撈到的記憶模型在輪內靠 TOOL_RESULT 看得到，進窗延後到輪末。
     const tools = toolsForContext(this.context);
+    const system = await this.buildPrompt(tools, now);
     const working = [...this.transcript, `使用者：${message}`];
     const toolCalls: SessionTurnResult["toolCalls"] = [];
+    const pendingToolHits: ScoredMemory[] = [];
 
     for (let i = 1; i <= MAX_TURNS; i++) {
-      const system = await this.buildPrompt(tools, now);
-      const raw = await this.llm.complete(system, working.join("\n"));
+      // 時間戳放尾端、分鐘粒度：每輪資料不污染 prefix
+      const raw = await this.llm.complete(
+        system,
+        [...working, `（現在時間：${now.toISOString().slice(0, 16)}）`].join("\n"),
+      );
       const action = parseAction(raw);
 
       if (!action) {
@@ -144,7 +153,8 @@ export class ChatSession {
       }
       if (action.action === "reply") {
         this.transcript.push(`使用者：${message}`, `（你）：${action.text}`);
-        this.transcript = this.transcript.slice(-TRANSCRIPT_LIMIT);
+        this.compactTranscript();
+        await this.finishTurn(pendingToolHits, admitted, now);
         return {
           reply: action.text,
           toolCalls,
@@ -174,8 +184,7 @@ export class ChatSession {
           topK: 5,
           now,
         });
-        this.admitScored(hits, "tool", admitted);
-        await this.expandLinks(admitted, now);
+        pendingToolHits.push(...hits);
         const result = {
           ok: true,
           memories: hits.map((m) => ({
@@ -227,7 +236,8 @@ export class ChatSession {
     }
 
     this.transcript.push(`使用者：${message}`);
-    this.transcript = this.transcript.slice(-TRANSCRIPT_LIMIT);
+    this.compactTranscript();
+    await this.finishTurn(pendingToolHits, admitted, now);
     return {
       reply: "（操作中斷：連續動作過多，請再說一次你要做什麼）",
       toolCalls,
@@ -235,6 +245,23 @@ export class ChatSession {
       windowSize: this.window.size,
       turns: MAX_TURNS,
     };
+  }
+
+  private compactTranscript(): void {
+    if (this.transcript.length > TRANSCRIPT_HIGH_WATER) {
+      this.transcript = this.transcript.slice(-TRANSCRIPT_KEEP);
+    }
+  }
+
+  /** 輪末結算：tool 撈到的記憶進窗 + link 擴展（輪內 system 不動，下一輪才反映）。 */
+  private async finishTurn(
+    hits: ScoredMemory[],
+    admitted: SessionTurnResult["admitted"],
+    now: Date,
+  ): Promise<void> {
+    if (hits.length === 0) return;
+    this.admitScored(hits, "tool", admitted);
+    await this.expandLinks(admitted, now);
   }
 
   private admitScored(
@@ -291,9 +318,10 @@ export class ChatSession {
     }
   }
 
-  /** 窗 → guard chain → system prompt。窗跨輪穩定時這段 prompt 不變（KV cache 友善）。 */
+  /** 窗 → guard chain → system prompt。prefix 穩定性：窗用插入序 render、時間戳不進 system —
+   *  多數輪 θ gating 空手而回 = 窗不變 = system 逐字不變 → 自部署 vLLM/SGLang prefix cache 全命中。 */
   private async buildPrompt(tools: DeviceTool[], now: Date): Promise<string> {
-    const entries = this.window.entries();
+    const entries = this.window.stableEntries();
     const guarded = await applyGuards(
       DEFAULT_GUARDS,
       entries.map((e) => ({
@@ -307,7 +335,7 @@ export class ChatSession {
       { loadContradictsLinks: (ids) => this.store.loadContradictsLinks(ids) },
     );
     const viaById = new Map(entries.map((e) => [e.memory.id, e.via]));
-    return buildSessionPrompt(this.context, now, guarded, viaById, tools);
+    return buildSessionPrompt(this.context, guarded, viaById, tools);
   }
 }
 
@@ -317,9 +345,10 @@ const VIA_LABEL: Partial<Record<WindowVia, string>> = {
   event: "【事件相關】",
 };
 
+/** Prompt 分層排列（§4.10 KV cache 對齊）：靜態（persona/規則/工具）在前、
+ *  慢變（記憶窗）殿後、每輪資料（時間戳）放 user 尾端 — prefix 失效點越後面越好。 */
 export function buildSessionPrompt(
   context: string,
-  now: Date,
   memories: GuardedMemory[],
   viaById: Map<string, WindowVia>,
   tools: DeviceTool[],
@@ -343,20 +372,14 @@ export function buildSessionPrompt(
 
   return [
     "你是 ASTRA，跨場景個人 AI 夥伴 — 車上、辦公室、家裡都是同一個你、同一份記憶，可以操作使用者的裝置。",
-    `當前場景：${context}。現在時間：${now.toISOString()}。`,
-    "",
-    "## 當前場景可用工具",
-    toolBlock,
-    "",
-    "## 記憶（工作集，依相關度排序）",
-    memoryBlock,
+    `當前場景：${context}。`,
     "",
     "## 輸出規則（嚴格遵守）",
     "每次只輸出一個 JSON 物件，不輸出任何其他文字：",
     '- 需要操作裝置或查記憶時：{"action":"tool_call","tool":"工具名","args":{...}}',
     '- 回覆使用者時：{"action":"reply","text":"回覆內容"}',
     "工具執行結果會以「TOOL_RESULT: {...}」訊息回給你，收到後繼續下一步（再呼叫工具或回覆）。",
-    "只能使用上面列出的工具；使用者要求的操作沒有對應工具時，用 reply 誠實說明做不到、不要假裝已執行。",
+    "只能使用下面列出的工具；使用者要求的操作沒有對應工具時，用 reply 誠實說明做不到、不要假裝已執行。",
     "",
     "## 記憶使用規則",
     "與使用者個人相關的事實只根據記憶區；記憶有標注（過時/矛盾/來源場景）時要在回覆中反映。",
@@ -368,5 +391,11 @@ export function buildSessionPrompt(
     "訊息以「INCOMING_CALL:」或「INCOMING_EMAIL:」開頭 = 來電/來信事件（不是使用者發言）：播報來者，並用【事件相關】記憶給使用者一句簡報（上次談了什麼、該注意什麼），然後問使用者要不要接聽/回覆。不要擅自接聽或回覆。",
     "",
     "reply 的 text 一律使用繁體中文（台灣用語），嚴禁出現任何簡體字。口語、簡潔，像貼身夥伴不像客服。",
+    "",
+    "## 當前場景可用工具",
+    toolBlock,
+    "",
+    "## 記憶（工作集）",
+    memoryBlock,
   ].join("\n");
 }

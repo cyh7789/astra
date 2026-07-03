@@ -78,9 +78,14 @@ export class MemoryWindow {
     return evicted;
   }
 
-  /** score 由高到低。 */
+  /** score 由高到低（展示/除錯用）。 */
   entries(): WindowEntry[] {
     return [...this.byId.values()].sort((a, b) => b.score - a.score);
+  }
+
+  /** 插入序（Map 天然保序）：prompt render 用 — refresh 不重排，prefix cache 才有命中可言。 */
+  stableEntries(): WindowEntry[] {
+    return [...this.byId.values()];
   }
 
   has(id: string): boolean {
