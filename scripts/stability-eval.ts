@@ -11,6 +11,7 @@ const LOG_DIR = "eval-logs";
 mkdirSync(LOG_DIR, { recursive: true });
 
 const passes = new Map<string, number>();
+const appearances = new Map<string, number>(); // 缺席（該輪崩潰沒跑到）≠ 失敗 — 分母用實際出現輪數
 const order: string[] = [];
 let crashedRuns = 0;
 
@@ -45,10 +46,16 @@ for (let run = 1; run <= RUNS; run++) {
     pass: boolean;
   }>;
   for (const r of results) {
+    if (r.name.startsWith("run 中斷")) {
+      crashedRuns++;
+      continue; // 崩潰標記不進矩陣（已由 crashedRuns 計）
+    }
     if (!passes.has(r.name)) {
       passes.set(r.name, 0);
+      appearances.set(r.name, 0);
       order.push(r.name);
     }
+    appearances.set(r.name, appearances.get(r.name)! + 1);
     if (r.pass) passes.set(r.name, passes.get(r.name)! + 1);
   }
 }
@@ -58,10 +65,11 @@ const stableFail: string[] = [];
 const flaky: string[] = [];
 for (const name of order) {
   const p = passes.get(name)!;
-  const mark = p === RUNS ? "✅" : p === 0 ? "🔴" : "🟡";
-  console.log(`${mark} ${p}/${RUNS}  ${name}`);
+  const n = appearances.get(name)!;
+  const mark = p === n ? "✅" : p === 0 ? "🔴" : "🟡";
+  console.log(`${mark} ${p}/${n}${n < RUNS ? `（${RUNS - n} 輪缺席）` : ""}  ${name}`);
   if (p === 0) stableFail.push(name);
-  else if (p < RUNS) flaky.push(name);
+  else if (p < n) flaky.push(name);
 }
 console.log(`\n穩定失敗（真 bug）：${stableFail.length ? stableFail.join("；") : "無"}`);
 console.log(`抖動（斷言或 prompt 待收斂）：${flaky.length ? flaky.join("；") : "無"}`);
@@ -70,8 +78,7 @@ if (order.length === 0) {
   console.error("沒有任何一輪產出資料 — eval 本身失敗，不得視為通過");
   process.exit(2);
 }
-const okRuns = RUNS - crashedRuns;
-const total = order.length * okRuns;
+const total = [...appearances.values()].reduce((a, b) => a + b, 0);
 const passed = [...passes.values()].reduce((a, b) => a + b, 0);
-console.log(`總通過率：${passed}/${total}（${((passed / total) * 100).toFixed(1)}%，分母 = 完成的 ${okRuns} 輪）`);
+console.log(`總通過率：${passed}/${total}（${((passed / total) * 100).toFixed(1)}%，分母 = 各檢查實際出現輪數）`);
 process.exit(stableFail.length > 0 || crashedRuns === RUNS ? 1 : 0);
