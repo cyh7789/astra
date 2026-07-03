@@ -75,4 +75,52 @@ describe("ChatSession 持久化與跨終端接續", () => {
     const nobody = "00000000-0000-0000-0000-00000000dead";
     expect(await ChatSession.resume(store, replyLlm, nobody, NOW)).toBeNull();
   });
+
+  it("高水位壓縮折疊 digest + open threads，resume 後注入 prompt", async () => {
+    const seen: Array<{ system: string; user: string }> = [];
+    const llm: LlmClient = {
+      async complete(system, user) {
+        seen.push({ system, user });
+        if (system.includes("對話摘要器")) {
+          return '{"digest":"聊了週末出遊規劃","openThreads":["訂宜蘭民宿還沒訂"]}';
+        }
+        return JSON.stringify({ action: "reply", text: "好的" });
+      },
+    };
+    const opts = { transcriptHighWater: 6, transcriptKeep: 2, extract: false };
+    const s = await ChatSession.open(store, llm, DEMO_USER, "home", NOW, opts);
+    for (const msg of ["週末想出去玩", "宜蘭如何？", "民宿晚點訂", "先看天氣"]) {
+      await s.send(msg, NOW);
+    }
+    // 第 4 次 send 後 8 行 > 6 → 觸發壓縮：digest 落庫
+    const state = await store.loadSessionState(DEMO_USER);
+    expect(state!.digest).toBe("聊了週末出遊規劃");
+    expect(state!.openThreads).toEqual(["訂宜蘭民宿還沒訂"]);
+    expect(state!.transcript.length).toBe(2);
+
+    // resume 還原 digest/threads，且下一輪 prompt 收得到
+    const r = await ChatSession.resume(store, llm, DEMO_USER, NOW, opts);
+    await r!.send("繼續", NOW);
+    const lastChat = seen.filter((c) => c.system.includes("ASTRA")).at(-1)!;
+    expect(lastChat.user).toContain("先前對話摘要：聊了週末出遊規劃");
+    expect(lastChat.user).toContain("未完成：訂宜蘭民宿還沒訂");
+  });
+
+  it("萃取寫回：跨場景主題自動帶 sourceContext，餵得進交接浮現", async () => {
+    const llm: LlmClient = {
+      async complete(system) {
+        if (system.includes("記憶萃取器")) {
+          return '[{"memoryType":"episodic","content":"到家後要澆陽台的花","context":"home","importance":0.6}]';
+        }
+        return JSON.stringify({ action: "reply", text: "好的" });
+      },
+    };
+    const s = await ChatSession.open(store, llm, DEMO_USER, "driving", NOW);
+    await s.send("回家提醒我澆陽台的花", NOW);
+
+    const candidates = await store.handoffCandidates(DEMO_USER, "home", NOW);
+    const flower = candidates.find((m) => m.content.includes("澆陽台的花"));
+    expect(flower).toBeDefined();
+    expect(flower!.sourceContext).toBe("driving"); // 在車上說的 home 事 → 交接浮現的資格
+  });
 });

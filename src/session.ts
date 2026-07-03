@@ -1,3 +1,4 @@
+import { buildExtractionPrompt, parseExtraction } from "./agent.js";
 import { MIN_VECTOR_SIM, MIN_VECTOR_SIM_INTENT } from "./config.js";
 import type { GuardedMemory } from "./guards.js";
 import { applyGuards, DEFAULT_GUARDS } from "./guards.js";
@@ -15,9 +16,27 @@ import { TOOLS, toolsForContext } from "./tools.js";
 
 const MAX_TURNS = 6;
 /** transcript 高水位批次壓縮：逐則滑動每輪都毀 prefix cache，
- *  批次丟（滿 24 砍到 12）讓失效變成低頻計畫性事件。被丟段折進 digest = 正式版（§4.9/4.10）。 */
+ *  批次丟（滿 24 砍到 12）讓失效變成低頻計畫性事件；被丟段同一時刻折進 digest（§4.9/4.10 —
+ *  digest 改寫發生在本來就要全量 prefill 的壓縮邊界，等於免費）。 */
 const TRANSCRIPT_HIGH_WATER = 24;
 const TRANSCRIPT_KEEP = 12;
+
+export interface SessionOptions {
+  /** 測試用：調低壓縮水位 */
+  transcriptHighWater?: number;
+  transcriptKeep?: number;
+  /** 每輪萃取寫回記憶（預設開；測試可關以隔離行為） */
+  extract?: boolean;
+}
+
+/** digest 只扛「聊到哪、剛決定什麼」的對話態；個人事實歸記憶層（§4.9 分工）。 */
+const CONDENSE_SYSTEM = [
+  "你是對話摘要器。輸入是：舊摘要、既有未完成事項、即將被移出視窗的對話行。",
+  '只回一個 JSON 物件：{"digest":"1-2 句新摘要","openThreads":["未完成事項", ...]}',
+  "digest 融合舊摘要與新內容，只保留：聊到什麼話題、做了什麼決定、當下氛圍。個人事實與偏好不用記（記憶系統負責）。",
+  "openThreads 只放懸而未決的事：沒回答的問題、承諾要做的動作、進行中還沒收尾的話題；已完成或已失效的從清單移除。沒有就給空陣列。",
+  "一律繁體中文（台灣用語）。",
+].join("\n");
 const EVENT_TTL_TURNS = 3; // 事件記憶處理完即退場，不長駐污染場景
 const LINK_SCORE = 0.4; // link 擴展條目的窗內分（可淘汰、不搶位）
 const SHORT_QUERY_CHARS = 10; // 被動空手 + 短訊息 → 併前句重試（Zep past-two-messages）
@@ -40,15 +59,25 @@ export class ChatSession {
   window = new MemoryWindow();
   private turn = 0;
   private transcript: string[] = [];
+  private digest = "";
+  private openThreads: string[] = [];
   private confirmedTools = new Set<string>();
   private lastUserMessage = "";
+  private readonly highWater: number;
+  private readonly keep: number;
+  private readonly extract: boolean;
 
   private constructor(
     private readonly store: MemoryStore,
     private readonly llm: LlmClient,
     private readonly userId: string,
     public context: string,
-  ) {}
+    opts?: SessionOptions,
+  ) {
+    this.highWater = opts?.transcriptHighWater ?? TRANSCRIPT_HIGH_WATER;
+    this.keep = opts?.transcriptKeep ?? TRANSCRIPT_KEEP;
+    this.extract = opts?.extract ?? true;
+  }
 
   /** 進場即跑場景進入程序（pin + 交接浮現），所以用 async factory。 */
   static async open(
@@ -57,8 +86,9 @@ export class ChatSession {
     userId: string,
     context: string,
     now = new Date(),
+    opts?: SessionOptions,
   ): Promise<ChatSession> {
-    const s = new ChatSession(store, llm, userId, context);
+    const s = new ChatSession(store, llm, userId, context, opts);
     await s.enterScene(now);
     return s;
   }
@@ -70,6 +100,7 @@ export class ChatSession {
     llm: LlmClient,
     userId: string,
     now = new Date(),
+    opts?: SessionOptions,
   ): Promise<ChatSession | null> {
     const state = await store.loadSessionState(userId);
     if (!state) return null;
@@ -80,9 +111,11 @@ export class ChatSession {
         .filter((m) => !m.expiresAt || m.expiresAt > now) // 過期記憶不復位
         .map((m) => [m.id, m]),
     );
-    const s = new ChatSession(store, llm, userId, state.context);
+    const s = new ChatSession(store, llm, userId, state.context, opts);
     s.turn = state.turn;
     s.transcript = state.transcript;
+    s.digest = state.digest;
+    s.openThreads = state.openThreads.filter((t): t is string => typeof t === "string");
     s.window = MemoryWindow.restore(state.windowEntries, byId);
     const lastUser = [...state.transcript].reverse().find((l) => l.startsWith("使用者："));
     s.lastUserMessage = lastUser?.slice("使用者：".length) ?? "";
@@ -130,8 +163,8 @@ export class ChatSession {
         turn: this.turn,
         windowEntries: this.window.serialize(),
         transcript: this.transcript,
-        digest: "",
-        openThreads: [],
+        digest: this.digest,
+        openThreads: this.openThreads,
       },
       now,
     );
@@ -185,7 +218,11 @@ export class ChatSession {
     // tool 撈到的記憶模型在輪內靠 TOOL_RESULT 看得到，進窗延後到輪末。
     const tools = toolsForContext(this.context);
     const system = await this.buildPrompt(tools, now);
-    const working = [...this.transcript, `使用者：${message}`];
+    // digest / open threads 放 working 頭部：只在壓縮邊界變動，不污染 prefix（§4.10）
+    const head: string[] = [];
+    if (this.digest) head.push(`（先前對話摘要：${this.digest}）`);
+    for (const t of this.openThreads) head.push(`（未完成：${t}）`);
+    const working = [...head, ...this.transcript, `使用者：${message}`];
     const toolCalls: SessionTurnResult["toolCalls"] = [];
     const pendingToolHits: ScoredMemory[] = [];
 
@@ -203,8 +240,9 @@ export class ChatSession {
       }
       if (action.action === "reply") {
         this.transcript.push(`使用者：${message}`, `（你）：${action.text}`);
-        this.compactTranscript();
+        await this.compactTranscript();
         await this.finishTurn(pendingToolHits, admitted, now);
+        if (this.extract) await this.extractMemories(message, now);
         await this.persist(now);
         return {
           reply: action.text,
@@ -287,7 +325,7 @@ export class ChatSession {
     }
 
     this.transcript.push(`使用者：${message}`);
-    this.compactTranscript();
+    await this.compactTranscript();
     await this.finishTurn(pendingToolHits, admitted, now);
     await this.persist(now);
     return {
@@ -299,9 +337,42 @@ export class ChatSession {
     };
   }
 
-  private compactTranscript(): void {
-    if (this.transcript.length > TRANSCRIPT_HIGH_WATER) {
-      this.transcript = this.transcript.slice(-TRANSCRIPT_KEEP);
+  /** 高水位壓縮 + 折疊 digest（§4.9）：被丟的對話行不是消失，是濃縮成對話態。 */
+  private async compactTranscript(): Promise<void> {
+    if (this.transcript.length <= this.highWater) return;
+    const dropped = this.transcript.slice(0, this.transcript.length - this.keep);
+    this.transcript = this.transcript.slice(-this.keep);
+    try {
+      const raw = await this.llm.complete(
+        CONDENSE_SYSTEM,
+        [
+          `舊摘要：${this.digest || "（無）"}`,
+          `既有未完成事項：${this.openThreads.length ? this.openThreads.join("；") : "（無）"}`,
+          "被移出的對話行：",
+          ...dropped,
+        ].join("\n"),
+      );
+      const obj = JSON.parse(raw.replace(/```json\s*|```\s*/g, "").trim()) as {
+        digest?: unknown;
+        openThreads?: unknown;
+      };
+      if (typeof obj.digest === "string") this.digest = obj.digest;
+      if (Array.isArray(obj.openThreads)) {
+        this.openThreads = obj.openThreads.filter((t): t is string => typeof t === "string");
+      }
+    } catch {
+      // 摘要失敗不炸對話：舊 digest 續用，被丟段的事實仍在記憶層
+    }
+  }
+
+  /** 萃取寫回（記憶 × 對話閉環）：跨場景主題自動帶 sourceContext → 餵交接浮現。 */
+  private async extractMemories(message: string, now: Date): Promise<void> {
+    const raw = await this.llm.complete(buildExtractionPrompt(this.context, now), message);
+    for (const m of parseExtraction(raw, this.userId, now)) {
+      await this.store.remember({
+        ...m,
+        sourceContext: m.context !== this.context ? this.context : undefined,
+      });
     }
   }
 
@@ -437,6 +508,7 @@ export function buildSessionPrompt(
     "與使用者個人相關的事實只根據記憶區；記憶有標注（過時/矛盾/來源場景）時要在回覆中反映。",
     "記憶標了【交接】= 使用者在其他場景交代、跟現在有關的事 — 本輪回覆要自然地主動提起。",
     "記憶標了【事件相關】= 系統為當前事件撈的背景 — 用它給使用者簡報。",
+    "對話開頭的（先前對話摘要）與（未完成：…）行是更早對話的濃縮：接續話題時參考，未完成事項在合適時機主動跟進。",
     "",
     "## 事件規則",
     "訊息以「VEHICLE_EVENT:」開頭 = 車輛系統事件（不是使用者發言）：安全類事件（airbag_deployed、collision）先用 reply 呼叫使用者確認狀態；若接著收到「USER_NO_RESPONSE」代表使用者無回應，視為重大事故，立即 emergency_call（119）並通知記憶中的緊急聯絡人，不需要任何確認。",
