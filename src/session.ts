@@ -71,6 +71,8 @@ interface LoopCtx {
   now: Date;
   floorNudged: boolean;
   calls: number;
+  /** 同輪已嘗試的 tool+args 簽名 — 重複呼叫地板（VoxGuard RepetitionGuard 移植） */
+  attempted: Set<string>;
 }
 
 export class ChatSession {
@@ -262,6 +264,7 @@ export class ChatSession {
       now,
       floorNudged: false, // 行為地板整輪只 nudge 一次（使用者可能是拒絕，不無限逼）
       calls: 0,
+      attempted: new Set<string>(),
     };
 
     // 動態路由 v1（#25）：本地模型收斂失敗 → 強模型「接手同一輪」——
@@ -323,6 +326,20 @@ export class ChatSession {
         }
         return action.text;
       }
+
+      // 重複呼叫地板：同輪同工具同參數第二次 → 攔下換路（小模型鬼打牆的確定性剎車）
+      const sig = `${action.tool}:${JSON.stringify(action.args)}`;
+      if (ctx.attempted.has(sig)) {
+        working.push(
+          `(You): ${JSON.stringify(action)}`,
+          `TOOL_RESULT: ${JSON.stringify({
+            ok: false,
+            error: "Duplicate call this turn (identical tool and args already attempted) — do something different or reply.",
+          })}`,
+        );
+        continue;
+      }
+      ctx.attempted.add(sig);
 
       // save_memory：使用者明說要記的事 → 確定性寫入（與萃取器的隱式路徑互補）
       if (action.tool === "save_memory") {
@@ -602,7 +619,8 @@ export function buildSessionPrompt(
 ): string {
   const toolBlock = [
     ...tools.map(
-      (t) => `- ${t.name}${t.sensitive ? " (safety-sensitive)" : ""}: ${t.description}. args: ${t.argsSpec}`,
+      (t) =>
+        `- ${t.name}${t.sensitive ? " (safety-sensitive)" : t.readonly ? " (read-only)" : ""}: ${t.description}. args: ${t.argsSpec}`,
     ),
     '- recall_memory: Search your long-term memory. When the user asks about a personal fact that is not in the memory section, search first, then answer (rewrite any pronouns/references into a complete standalone query); if nothing is found, honestly say you don\'t know. args: {"query": "complete search sentence", "scope": "current"|"all"} (all = search across scenes; when citing cross-scene results, mention the source scene)',
     '- save_memory: Explicitly save something the user asks you to remember (meeting notes, decisions, facts) as a self-contained sentence in the user\'s language. args: {"content": "the fact", "type": "episodic"|"semantic"|"procedural", "context": "driving"|"office"|"home"|"any", "importance": 0-1, "expiresInHours": number (optional)}',
@@ -630,6 +648,9 @@ export function buildSessionPrompt(
     '- To reply to the user: {"action":"reply","text":"..."}',
     'Tool results come back as messages starting with "TOOL_RESULT: {...}"; continue with the next step (another tool call or a reply).',
     "Only use the tools listed below. If the user asks for something with no matching tool, reply honestly that you can't do it — never pretend you did.",
+    "Tools marked (read-only) only report state; finding something via a query never implies you can act on it — acting requires its own tool from the list.",
+    "When asking the user to confirm an action, state exactly what you will do, including the argument values (e.g., \"lock the front door (secured)\" — not just \"adjust things\").",
+    "Never call the same tool with identical arguments twice in one turn — the system rejects duplicates.",
     'Composite requests (e.g., "good night", "I\'m heading out") usually need several device actions: execute them one tool call at a time, then reply with a summary of everything done.',
     "Never claim an action was performed unless you called the tool and saw an ok TOOL_RESULT this turn.",
     "Tools marked (safety-sensitive) need user confirmation, handled by the system: attempt the tool call directly — the system intercepts it and tells you to confirm; put that question in your reply, and after the user approves in their next message, call the tool again to actually execute.",

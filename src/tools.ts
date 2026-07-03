@@ -14,6 +14,8 @@ export interface DeviceTool {
   description: string;
   argsSpec: string;
   sensitive?: boolean;
+  /** 只讀（QUERY）工具：查到 ≠ 能做 — prompt 標注用（VoxGuard QUERY/ACTION 分離） */
+  readonly?: boolean;
   validate(args: Record<string, unknown>): string | null;
   execute(args: Record<string, unknown>): Record<string, unknown>;
 }
@@ -39,6 +41,7 @@ const driving: DeviceTool[] = [
   {
     name: "get_routes",
     context: "driving",
+    readonly: true,
     description:
       "List route options to a destination (when several exist, ask the user to choose — never decide alone)",
     argsSpec: '{"destination": "destination name"}',
@@ -58,6 +61,7 @@ const driving: DeviceTool[] = [
   {
     name: "search_poi",
     context: "driving",
+    readonly: true,
     description: "Search points of interest (shops/gas stations) along the route or nearby",
     argsSpec: '{"query": "search term", "along_route": true|false}',
     validate: (a) =>
@@ -93,6 +97,7 @@ const driving: DeviceTool[] = [
   {
     name: "get_fuel_level",
     context: "driving",
+    readonly: true,
     description: "Check fuel level and remaining range",
     argsSpec: "{} (no args)",
     validate: () => null,
@@ -127,6 +132,7 @@ const driving: DeviceTool[] = [
   {
     name: "get_weather",
     context: "driving",
+    readonly: true,
     description: "Check the weather (destination or current location)",
     argsSpec: '{"location": "place (optional = current location)"}',
     validate: () => null,
@@ -244,6 +250,7 @@ const home: DeviceTool[] = [
   {
     name: "read_sensors",
     context: "home",
+    readonly: true,
     description: "Read home sensors (temperature/humidity/air quality/motion, HomeKit Sensors)",
     argsSpec: '{"room": "room name (optional = whole home)"}',
     validate: () => null,
@@ -264,6 +271,7 @@ const office: DeviceTool[] = [
   {
     name: "get_calendar",
     context: "office",
+    readonly: true,
     description: "Check today's calendar",
     argsSpec: "{} (no args)",
     validate: () => null,

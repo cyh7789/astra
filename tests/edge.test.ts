@@ -100,6 +100,25 @@ describe("session 邊角案例", () => {
     expect(t.reply).toContain("事件");
   });
 
+  it("重複呼叫地板：同輪同工具同參數第二次被攔、不重複執行", async () => {
+    const payloads: string[] = [];
+    const queue = [
+      '{"action":"tool_call","tool":"set_light","args":{"room":"all","on":false}}',
+      '{"action":"tool_call","tool":"set_light","args":{"room":"all","on":false}}', // 一模一樣
+      '{"action":"reply","text":"燈關好了"}',
+    ];
+    const llm: LlmClient = {
+      async complete(_s, user) {
+        payloads.push(user);
+        return queue.shift()!;
+      },
+    };
+    const s = await ChatSession.open(store, llm, USER, "home", NOW, { extract: false });
+    const t = await s.send("關燈", NOW);
+    expect(t.toolCalls).toHaveLength(1); // 只執行一次
+    expect(payloads.some((p) => p.includes("Duplicate call"))).toBe(true);
+  });
+
   it("參數邊界：驗證錯誤回饋後模型修正重試", async () => {
     const llm = queueLlm([
       '{"action":"tool_call","tool":"set_climate","args":{"temperature":31}}', // 超界
