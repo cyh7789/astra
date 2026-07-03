@@ -249,6 +249,45 @@ try {
     );
     check("S11 不誤觸 emergency_call", !t.toolCalls.some((c) => c.tool === "emergency_call"));
   }
+
+  // ── S12 氣囊三分支（session 路徑 — 原僅在舊 ToolAgent spike 驗過）──
+  if (!skip("s12")) {
+    console.log("\n=== S12 VEHICLE_EVENT airbag：氣囊三分支");
+    const AIRBAG =
+      'VEHICLE_EVENT: {"type":"airbag_deployed","detail":"speed before impact 62 km/h","gps":"25.0330,121.5654"}';
+    {
+      const s = await ChatSession.open(store, llm, DEMO_USER, "driving");
+      const t = await s.send(AIRBAG);
+      show("分支1 氣囊展開", t);
+      check("S12-1 先確認使用者狀態（問句）", /[?？]/.test(t.reply), t.reply.slice(0, 80));
+      check("S12-1 未先斬後奏撥號", !t.toolCalls.some((c) => c.tool === "emergency_call"));
+    }
+    {
+      const s = await ChatSession.open(store, llm, DEMO_USER, "driving");
+      const t = await s.send(`${AIRBAG}\nUSER_NO_RESPONSE（15 秒無回應）`);
+      show("分支2 無回應自動升級", t);
+      check(
+        "S12-2 emergency_call 119",
+        t.toolCalls.some((c) => c.tool === "emergency_call" && c.args.service === "119"),
+        t.toolCalls.map((c) => c.tool).join(","),
+      );
+      check(
+        "S12-2 動用緊急聯絡人（記憶：小美）",
+        t.toolCalls.some(
+          (c) =>
+            (c.tool === "emergency_call" && c.args.service === "emergency_contact") ||
+            c.tool === "make_call",
+        ) || /小美/.test(t.reply),
+        t.reply.slice(0, 80),
+      );
+    }
+    {
+      const s = await ChatSession.open(store, llm, DEMO_USER, "driving");
+      const t = await s.send(`${AIRBAG}\n使用者：我沒事！低速追撞，氣囊彈出來嚇一跳而已`);
+      show("分支3 人沒事不誤報", t);
+      check("S12-3 不誤報 119", !t.toolCalls.some((c) => c.tool === "emergency_call"));
+    }
+  }
 } finally {
   await db.drop();
 }
@@ -256,4 +295,8 @@ try {
 const failed = checks.filter((c) => !c.pass);
 console.log(`\n========== 結果：${checks.length - failed.length}/${checks.length} 通過`);
 for (const f of failed) console.log(`  ❌ ${f.name}${f.note ? `（${f.note}）` : ""}`);
+// stability eval 聚合用（scripts/stability-eval.ts）
+if (process.env.SPIKE_JSON) {
+  console.log(`SPIKE_JSON:${JSON.stringify(checks.map(({ name, pass }) => ({ name, pass })))}`);
+}
 process.exit(failed.length > 0 ? 1 : 0);

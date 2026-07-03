@@ -17,6 +17,32 @@ export class VoyageEmbedder implements Embedder {
     this.apiKey = apiKey;
   }
 
+  /** 批次 embed（量級壓測/大量匯入用）：Voyage 單請求上限 128 筆。純文字端點限定。 */
+  async embedBatch(texts: string[]): Promise<number[][]> {
+    if (this.model.includes("multimodal")) throw new Error("embedBatch: text-only endpoint");
+    const out: number[][] = [];
+    for (let i = 0; i < texts.length; i += 128) {
+      const chunk = texts.slice(i, i + 128);
+      const res = await fetch("https://api.voyageai.com/v1/embeddings", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${this.apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ model: this.model, input: chunk }),
+      });
+      if (!res.ok) {
+        throw new Error(`voyage batch embed failed: ${res.status} ${await res.text()}`);
+      }
+      const data = (await res.json()) as { data: Array<{ embedding: number[] }> };
+      for (const d of data.data) {
+        const norm = Math.hypot(...d.embedding) || 1;
+        out.push(d.embedding.map((x) => x / norm));
+      }
+    }
+    return out;
+  }
+
   async embed(text: string): Promise<number[]> {
     const multimodal = this.model.includes("multimodal");
     const url = multimodal

@@ -1,6 +1,6 @@
 import type pg from "pg";
 import type { FusionWeights } from "./config.js";
-import { CANDIDATE_LIMIT, DEFAULT_FUSION_WEIGHTS } from "./config.js";
+import { CANDIDATE_LIMIT, CANDIDATE_OVERSAMPLE, DEFAULT_FUSION_WEIGHTS } from "./config.js";
 import { encodeVector } from "./db.js";
 import type { Embedder } from "./embedder.js";
 import type { ContradictsLink, GuardedMemory, RecallGuard } from "./guards.js";
@@ -172,22 +172,28 @@ export class MemoryStore {
     );
   }
 
-  /** Hybrid query：SQL 範圍過濾（user/場景/隱私/時效/未刪）+ 向量距離排序，一條 query 進 CockroachDB。
-   *  ORDER BY 用 <->（L2）：向量索引預設 vector_l2_ops，EXPLAIN 實測 <=> 不走索引、<-> 走 vector search。
-   *  Embedder 產出的向量皆 L2 normalized，L2 排序 ≡ cosine 排序（L2² = 2−2cos）；
-   *  SELECT 仍算 cosine 相似度供顯示與融合。 */
+  /** Hybrid query，兩段式（7/5 EXPLAIN 實證重寫）：
+   *  內層只帶 user_id（向量索引 prefix 欄位）做純向量 top-k → 走 vector search 節點；
+   *  外層補 刪除/時效/場景/隱私 過濾 — 非 prefix 過濾放內層會讓 planner 放棄索引退化成全表掃。
+   *  被外層濾掉的候選由內層 CANDIDATE_OVERSAMPLE 過取樣補償。
+   *  ORDER BY 用 <->（L2）：索引 vector_l2_ops；向量皆 L2 normalized，L2 排序 ≡ cosine 排序（L2² = 2−2cos）。
+   *  注意：批量匯入後要 ANALYZE，missing stats 時 planner 同樣不選向量索引（scripts/explain-debug.ts）。 */
   async fetchCandidates(q: RecallQuery): Promise<Candidate[]> {
     const now = q.now ?? new Date();
     const queryEmbedding = await this.embedder.embed(q.query);
     const r = await this.pool.query(
-      `SELECT ${MEMORY_COLS},
-              1 - (embedding <=> $2::vector) AS vector_sim
-       FROM memories
-       WHERE user_id = $1
-         AND deleted_at IS NULL
+      `SELECT ${MEMORY_COLS}, vector_sim FROM (
+         SELECT ${MEMORY_COLS}, deleted_at,
+                1 - (embedding <=> $2::vector) AS vector_sim
+         FROM memories
+         WHERE user_id = $1
+         ORDER BY embedding <-> $2::vector
+         LIMIT ${CANDIDATE_LIMIT * CANDIDATE_OVERSAMPLE}
+       )
+       WHERE deleted_at IS NULL
          AND (expires_at IS NULL OR expires_at > $4)
          AND ($6 OR context = $3 OR context = 'any' OR privacy_level IN ('cross-context', 'public'))
-       ORDER BY embedding <-> $2::vector
+       ORDER BY vector_sim DESC
        LIMIT $5`,
       [q.userId, encodeVector(queryEmbedding), q.context, now, CANDIDATE_LIMIT, q.scope === "cross"],
     );

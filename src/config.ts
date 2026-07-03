@@ -21,6 +21,11 @@ export const DEFAULT_FUSION_WEIGHTS: FusionWeights = {
 /** 候選集大小：SQL+向量先砍到這個量，BM25/融合在應用層做 */
 export const CANDIDATE_LIMIT = 200;
 
+/** 兩段式向量查詢的內層過取樣倍率（7/5 EXPLAIN 實證）：
+ *  向量索引不吃 prefix 欄位以外的過濾（deleted_at/expires/context 會讓 planner 放棄索引），
+ *  改為內層純向量 top-(LIMIT×倍率) 走索引、外層補過濾 — 被濾掉的由過取樣補償。 */
+export const CANDIDATE_OVERSAMPLE = 2;
+
 /** 記憶窗准入門檻（原始 cosine）。voyage-4-large 校準 2026-07-04：
  *  相關最低 0.375、真不相關最高 0.27 — 換 embedder 必重跑 scripts/threshold-calibrate.ts。 */
 export const MIN_VECTOR_SIM = 0.35;
