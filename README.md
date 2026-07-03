@@ -66,6 +66,25 @@ npm run cli -- recall --context home "冰箱裡還有什麼？晚餐吃什麼好
 
 已知展示面小瑕疵：候選集小的時候 min-max 歸一化會把最弱候選壓到 0.00（仍會回傳、排序正確）。Phase 4 進 reranker 時一併處理。
 
+## MCP Server
+
+ASTRA 記憶層透過 MCP 協定暴露，任何 MCP 相容 client 都能接：
+
+```bash
+npm run mcp                              # stdio server
+# 或註冊給 Claude Code：
+claude mcp add astra-memory -- npx tsx /path/to/astra/src/mcp-server.ts
+```
+
+| 工具 | 功能 |
+|------|------|
+| `remember` | 寫入記憶（episodic/semantic/procedural、隱私分級、時效） |
+| `recall` | 多訊號融合檢索（回傳含訊號分解，不含 embedding） |
+| `update_memory` | 更新記憶，改 content 自動重算 embedding |
+| `forget` | soft delete，之後 recall 不再回傳 |
+
+使用者身分綁 `ASTRA_USER_ID` 環境變數（單使用者夥伴模型），不暴露在工具參數。錯誤走 MCP `isError` content，不炸 session。
+
 Phase 1 用確定性 FakeEmbedder（token 重疊 ≈ 相似度）讓測試不依賴外部 API；真語意（「氣炸鍋」↔「晚餐」）等 Phase 4 換 Bedrock Titan Embeddings V2。
 
 ## Roadmap
@@ -73,7 +92,7 @@ Phase 1 用確定性 FakeEmbedder（token 重疊 ≈ 相似度）讓測試不依
 | Phase | 內容 |
 |-------|------|
 | 1 ✅ | 記憶核心：schema + 多訊號融合檢索 + 三場景測試 |
-| 2 | MCP server（remember / recall / update_memory / forget 工具） |
+| 2 ✅ | MCP server（remember / recall / update_memory / forget 工具） |
 | 3 | Guard Chain（Privacy/Hallucination/Recency/Conflict）+ 記憶萃取器 + 場景偵測 |
 | 4 | Bedrock agent + LLM reranker + demo UI + 真 embeddings |
 | 5 | AWS 部署（Lambda pre-warming、ECS）+ CockroachDB Cloud |
