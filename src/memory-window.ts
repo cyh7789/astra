@@ -67,10 +67,11 @@ export class MemoryWindow {
     return true;
   }
 
-  /** 每輪開始：清掉過期的 event 條目。 */
-  beginTurn(turn: number): void {
+  /** 每輪開始：清掉過期的 event 條目 + 對話中途過期的記憶（expiresAt 走到窗裡也要退場）。 */
+  beginTurn(turn: number, now?: Date): void {
     for (const [id, e] of this.byId) {
       if (e.expiresTurn !== undefined && turn >= e.expiresTurn) this.byId.delete(id);
+      else if (now && e.memory.expiresAt && e.memory.expiresAt <= now) this.byId.delete(id);
     }
   }
 
@@ -162,9 +163,13 @@ export class MemoryWindow {
     return dropped;
   }
 
-  /** 超容量/超字數 → 淘汰 lastRelevantTurn 最舊者，同齡淘汰 score 低者。pinned 豁免。 */
+  /** 超容量/超字數 → 淘汰 lastRelevantTurn 最舊者，同齡淘汰 score 低者。pinned 豁免。
+   *  至少留 1 筆：單筆超預算的長記憶不該把自己淘汰成空窗（7/6 edge case）。 */
   private evictOverBudget(): void {
-    while (this.byId.size > this.capacity || this.charSize() > this.charBudget) {
+    while (
+      this.byId.size > 1 &&
+      (this.byId.size > this.capacity || this.charSize() > this.charBudget)
+    ) {
       const candidates = [...this.byId.values()]
         .filter((e) => !e.pinned)
         .sort((a, b) => a.lastRelevantTurn - b.lastRelevantTurn || a.score - b.score);

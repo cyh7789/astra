@@ -194,7 +194,7 @@ export class ChatSession {
 
   async send(message: string, now = new Date()): Promise<SessionTurnResult> {
     this.turn++;
-    this.window.beginTurn(this.turn);
+    this.window.beginTurn(this.turn, now);
     // 新的使用者訊息 = 對上一輪被攔敏感操作的回應已到 → 解鎖（是否執行仍由模型解讀使用者意圖）
     const unlockedThisTurn = new Set(this.pendingConfirm);
     for (const t of this.pendingConfirm) this.confirmedTools.add(t);
@@ -427,6 +427,8 @@ export class ChatSession {
         continue;
       }
       const result = tool.execute(action.args);
+      // 敏感確認單次有效：執行一次即重新上鎖，下次呼叫重走確認（7/6 edge case 衝刺抓到的語意漏洞）
+      if (tool.sensitive) this.confirmedTools.delete(tool.name);
       toolCalls.push({ tool: tool.name, args: action.args, result });
       working.push(`(You): ${JSON.stringify(action)}`, `TOOL_RESULT: ${JSON.stringify(result)}`);
     }
