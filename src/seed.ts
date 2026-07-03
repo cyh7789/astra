@@ -119,6 +119,16 @@ export function demoMemories(now: Date): Array<MemoryInput & { key: string }> {
       content: "冷氣習慣開 26 度、除濕模式",
       createdAt: new Date(now.getTime() - 30 * d),
     },
+    // procedural：使用者自訂的例行流程（組合動作由記憶驅動，不硬編 prompt）
+    {
+      key: "sleep-routine",
+      userId: DEMO_USER,
+      context: "home",
+      memoryType: "procedural",
+      content: "睡前流程：關掉全部的燈、冷氣調 26 度除濕、臥室窗簾拉上、保全切夜間模式、大門上鎖",
+      importance: 0.8,
+      createdAt: new Date(now.getTime() - 30 * d),
+    },
     // 衝突情境（ConflictGuard demo）：長期偏好 vs 昨天的行為互相矛盾
     {
       key: "no-spicy",

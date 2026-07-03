@@ -14,7 +14,7 @@ import { TOOLS, toolsForContext } from "./tools.js";
  *  Layer 1 被動增量（θ gating）→ Layer 2 記憶窗（跨輪工作集）→ Layer 3 recall_memory tool。
  *  PoC 範圍：不含萃取寫回、session 持久化、digest、open threads。 */
 
-const MAX_TURNS = 6;
+const MAX_TURNS = 8; // 組合動作（睡眠模式一次串 5+ 工具）要夠的迴圈空間
 /** transcript 高水位批次壓縮：逐則滑動每輪都毀 prefix cache，
  *  批次丟（滿 24 砍到 12）讓失效變成低頻計畫性事件；被丟段同一時刻折進 digest（§4.9/4.10 —
  *  digest 改寫發生在本來就要全量 prefill 的壓縮邊界，等於免費）。 */
@@ -42,7 +42,7 @@ const EVENT_TTL_TURNS = 3; // 事件記憶處理完即退場，不長駐污染�
 const LINK_SCORE = 0.4; // link 擴展條目的窗內分（可淘汰、不搶位）
 const SHORT_QUERY_CHARS = 10; // 被動空手 + 短訊息 → 併前句重試（Zep past-two-messages）
 
-const EVENT_RE = /^(INCOMING_CALL|INCOMING_EMAIL):\s*(\{.*\})/s;
+const EVENT_RE = /^(INCOMING_CALL|INCOMING_EMAIL|VEHICLE_EVENT|HOME_EVENT|CALENDAR_EVENT):\s*(\{.*\})/s;
 
 /** 邊界重打分（§4.9）：gap 超過此值視為冷 resume，窗要冷卻。 */
 const RESUME_WARM_GAP_MINUTES = 30;
@@ -63,6 +63,8 @@ export class ChatSession {
   private digest = "";
   private openThreads: string[] = [];
   private confirmedTools = new Set<string>();
+  /** 被攔下的敏感工具：要等「下一則使用者訊息」才解鎖 — 同輪重試仍被攔，確認權真的在使用者手上 */
+  private pendingConfirm = new Set<string>();
   private lastUserMessage = "";
   private readonly highWater: number;
   private readonly keep: number;
@@ -174,6 +176,10 @@ export class ChatSession {
   async send(message: string, now = new Date()): Promise<SessionTurnResult> {
     this.turn++;
     this.window.beginTurn(this.turn);
+    // 新的使用者訊息 = 對上一輪被攔敏感操作的回應已到 → 解鎖（是否執行仍由模型解讀使用者意圖）
+    const unlockedThisTurn = new Set(this.pendingConfirm);
+    for (const t of this.pendingConfirm) this.confirmedTools.add(t);
+    this.pendingConfirm.clear();
     const admitted: SessionTurnResult["admitted"] = [];
 
     // 事件訊息（流動政策 §4.8：事件主體決定 scope）
@@ -226,6 +232,7 @@ export class ChatSession {
     const working = [...head, ...this.transcript, `User: ${message}`];
     const toolCalls: SessionTurnResult["toolCalls"] = [];
     const pendingToolHits: ScoredMemory[] = [];
+    let floorNudged = false; // 行為地板每輪只 nudge 一次（使用者可能是拒絕，不無限逼）
 
     for (let i = 1; i <= MAX_TURNS; i++) {
       // 時間戳放尾端、分鐘粒度：每輪資料不污染 prefix
@@ -242,6 +249,15 @@ export class ChatSession {
         continue;
       }
       if (action.action === "reply") {
+        // 行為地板（CAR-bench 經驗：prompt 是上限、harness 是下限）— 攔 reply 不是攔對話
+        if (!floorNudged) {
+          const nudge = safetyFloorNudge(message, toolCalls, unlockedThisTurn);
+          if (nudge) {
+            floorNudged = true;
+            working.push(`(You): ${JSON.stringify(action)}`, `SYSTEM_GUARD: ${nudge}`);
+            continue;
+          }
+        }
         this.transcript.push(`User: ${message}`, `(You): ${action.text}`);
         await this.compactTranscript();
         await this.finishTurn(pendingToolHits, admitted, now);
@@ -254,6 +270,41 @@ export class ChatSession {
           windowSize: this.window.size,
           turns: i,
         };
+      }
+
+      // save_memory：使用者明說要記的事 → 確定性寫入（與萃取器的隱式路徑互補）
+      if (action.tool === "save_memory") {
+        const content = typeof action.args.content === "string" ? action.args.content.trim() : "";
+        if (!content) {
+          working.push(
+            `(You): ${JSON.stringify(action)}`,
+            `TOOL_RESULT: ${JSON.stringify({ ok: false, error: "content must be a non-empty string" })}`,
+          );
+          continue;
+        }
+        const memoryType =
+          action.args.type === "semantic" || action.args.type === "procedural"
+            ? action.args.type
+            : "episodic";
+        const targetContext =
+          typeof action.args.context === "string" && action.args.context ? action.args.context : this.context;
+        const saved = await this.store.remember({
+          userId: this.userId,
+          context: targetContext,
+          memoryType,
+          content,
+          importance: typeof action.args.importance === "number" ? action.args.importance : 0.7,
+          expiresAt:
+            typeof action.args.expiresInHours === "number"
+              ? new Date(now.getTime() + action.args.expiresInHours * 3_600_000)
+              : undefined,
+          sourceContext: targetContext !== this.context ? this.context : undefined,
+        });
+        this.window.admit(saved, { score: 0.8, turn: this.turn, via: "tool" });
+        const result = { ok: true, saved: content, type: memoryType, context: targetContext };
+        toolCalls.push({ tool: "save_memory", args: action.args, result });
+        working.push(`(You): ${JSON.stringify(action)}`, `TOOL_RESULT: ${JSON.stringify(result)}`);
+        continue;
       }
 
       // Layer 3：recall_memory 是 harness 級工具，不在裝置目錄
@@ -303,7 +354,7 @@ export class ChatSession {
         continue;
       }
       if (tool.sensitive && !this.confirmedTools.has(tool.name)) {
-        this.confirmedTools.add(tool.name);
+        this.pendingConfirm.add(tool.name);
         working.push(
           `(You): ${JSON.stringify(action)}`,
           `TOOL_RESULT: ${JSON.stringify({
@@ -369,14 +420,19 @@ export class ChatSession {
     }
   }
 
-  /** 萃取寫回（記憶 × 對話閉環）：跨場景主題自動帶 sourceContext → 餵交接浮現。 */
+  /** 萃取寫回（記憶 × 對話閉環）：跨場景主題自動帶 sourceContext → 餵交接浮現。
+   *  best-effort：萃取失敗（API 掛掉/retry 耗盡）不得炸掉對話。 */
   private async extractMemories(message: string, now: Date): Promise<void> {
-    const raw = await this.llm.complete(buildExtractionPrompt(this.context, now), message);
-    for (const m of parseExtraction(raw, this.userId, now)) {
-      await this.store.remember({
-        ...m,
-        sourceContext: m.context !== this.context ? this.context : undefined,
-      });
+    try {
+      const raw = await this.llm.complete(buildExtractionPrompt(this.context, now), message);
+      for (const m of parseExtraction(raw, this.userId, now)) {
+        await this.store.remember({
+          ...m,
+          sourceContext: m.context !== this.context ? this.context : undefined,
+        });
+      }
+    } catch {
+      // 這輪沒萃取到 — 事實仍在 transcript/digest，下次對話還有機會
     }
   }
 
@@ -466,6 +522,27 @@ export class ChatSession {
   }
 }
 
+/** 確定性行為地板：回 null = 放行 reply；回字串 = 攔下 reply、把訊息餵回模型再跑一步。 */
+export function safetyFloorNudge(
+  message: string,
+  toolCalls: SessionTurnResult["toolCalls"],
+  unlockedThisTurn: Set<string>,
+): string | null {
+  // 地板 1：危險事件 + 無回應 → emergency_call 不可缺席（人命優先）
+  const hazardNoResponse =
+    /USER_NO_RESPONSE/.test(message) &&
+    /(airbag_deployed|collision|smoke_detected|gas_leak)/.test(message);
+  if (hazardNoResponse && !toolCalls.some((t) => t.tool === "emergency_call")) {
+    return "Hazard event with USER_NO_RESPONSE: emergency_call is required NOW (life first, no confirmation needed) — call it, unless the user has clearly responded since.";
+  }
+  // 地板 2：已解鎖的敏感操作不得「說了沒做」
+  const unexecuted = [...unlockedThisTurn].filter((t) => !toolCalls.some((c) => c.tool === t));
+  if (unexecuted.length > 0) {
+    return `Confirmed sensitive actions not yet executed: ${unexecuted.join(", ")}. If the user approved, call them now; if the user declined, reply WITHOUT claiming they were done.`;
+  }
+  return null;
+}
+
 const VIA_LABEL: Partial<Record<WindowVia, string>> = {
   pin: "[pinned] ",
   handoff: "[handoff] ",
@@ -481,8 +558,11 @@ export function buildSessionPrompt(
   tools: DeviceTool[],
 ): string {
   const toolBlock = [
-    ...tools.map((t) => `- ${t.name}: ${t.description}. args: ${t.argsSpec}`),
+    ...tools.map(
+      (t) => `- ${t.name}${t.sensitive ? " (safety-sensitive)" : ""}: ${t.description}. args: ${t.argsSpec}`,
+    ),
     '- recall_memory: Search your long-term memory. When the user asks about a personal fact that is not in the memory section, search first, then answer (rewrite any pronouns/references into a complete standalone query); if nothing is found, honestly say you don\'t know. args: {"query": "complete search sentence", "scope": "current"|"all"} (all = search across scenes; when citing cross-scene results, mention the source scene)',
+    '- save_memory: Explicitly save something the user asks you to remember (meeting notes, decisions, facts) as a self-contained sentence in the user\'s language. args: {"content": "the fact", "type": "episodic"|"semantic"|"procedural", "context": "driving"|"office"|"home"|"any", "importance": 0-1, "expiresInHours": number (optional)}',
   ].join("\n");
 
   const memoryBlock =
@@ -507,6 +587,9 @@ export function buildSessionPrompt(
     '- To reply to the user: {"action":"reply","text":"..."}',
     'Tool results come back as messages starting with "TOOL_RESULT: {...}"; continue with the next step (another tool call or a reply).',
     "Only use the tools listed below. If the user asks for something with no matching tool, reply honestly that you can't do it — never pretend you did.",
+    'Composite requests (e.g., "good night", "I\'m heading out") usually need several device actions: execute them one tool call at a time, then reply with a summary of everything done.',
+    "Never claim an action was performed unless you called the tool and saw an ok TOOL_RESULT this turn.",
+    "Tools marked (safety-sensitive) need user confirmation, handled by the system: attempt the tool call directly — the system intercepts it and tells you to confirm; put that question in your reply, and after the user approves in their next message, call the tool again to actually execute.",
     "",
     "## Memory rules",
     "Personal facts about the user must come only from the memory section; when a memory carries an annotation (stale / conflicting / from another scene), reflect it in your reply.",
@@ -517,6 +600,8 @@ export function buildSessionPrompt(
     "## Event rules",
     'A message starting with "VEHICLE_EVENT:" is a vehicle system event (not the user speaking): for safety events (airbag_deployed, collision), first reply to check on the user; if "USER_NO_RESPONSE" follows, treat it as a major accident — immediately emergency_call (119) and notify the emergency contact found in memory, no confirmation needed.',
     'A message starting with "INCOMING_CALL:" or "INCOMING_EMAIL:" is a call/email event (not the user speaking): announce who it is, brief the user in one line using the [event] memories (what was last discussed, what to watch for), then ask whether to answer/reply. Never answer on your own.',
+    'A message starting with "HOME_EVENT:" is a home system event (not the user speaking): for hazard events (smoke_detected, gas_leak), act immediately to reduce danger first (e.g., set_outlet off for the suspect appliance), then warn the user and ask if they are okay; if "USER_NO_RESPONSE" follows or the hazard is confirmed spreading, emergency_call (119) immediately, no confirmation needed. If the user says it is a false alarm, do not escalate — give practical advice instead.',
+    'A message starting with "CALENDAR_EVENT:" is a schedule event (not the user speaking), e.g. a departure reminder computed from the calendar and travel time: brief the user on the appointment using the [event] memories, tell them when to leave, and offer helpful actions available in the current scene (e.g., start navigation in the car).',
     "",
     "Reply in the same language the user speaks. For Chinese, use Traditional Chinese (Taiwan usage) only — simplified characters are strictly forbidden. Be conversational and concise, like a close companion, not customer service.",
     "",
