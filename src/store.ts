@@ -153,7 +153,10 @@ export class MemoryStore {
     );
   }
 
-  /** Hybrid query：SQL 範圍過濾（user/場景/隱私/時效/未刪）+ 向量距離排序，一條 query 進 CockroachDB。 */
+  /** Hybrid query：SQL 範圍過濾（user/場景/隱私/時效/未刪）+ 向量距離排序，一條 query 進 CockroachDB。
+   *  ORDER BY 用 <->（L2）：向量索引預設 vector_l2_ops，EXPLAIN 實測 <=> 不走索引、<-> 走 vector search。
+   *  Embedder 產出的向量皆 L2 normalized，L2 排序 ≡ cosine 排序（L2² = 2−2cos）；
+   *  SELECT 仍算 cosine 相似度供顯示與融合。 */
   async fetchCandidates(q: RecallQuery): Promise<Candidate[]> {
     const now = q.now ?? new Date();
     const queryEmbedding = await this.embedder.embed(q.query);
@@ -165,7 +168,7 @@ export class MemoryStore {
          AND deleted_at IS NULL
          AND (expires_at IS NULL OR expires_at > $4)
          AND (context = $3 OR context = 'any' OR privacy_level IN ('cross-context', 'public'))
-       ORDER BY embedding <=> $2::vector
+       ORDER BY embedding <-> $2::vector
        LIMIT $5`,
       [q.userId, encodeVector(queryEmbedding), q.context, now, CANDIDATE_LIMIT],
     );

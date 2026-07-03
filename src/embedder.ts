@@ -1,6 +1,8 @@
 import { EMBEDDING_DIM } from "./config.js";
 import { tokenize } from "./text.js";
 
+/** 實作契約：回傳向量必須 L2 normalized —
+ *  檢索層靠這個前提讓 <->（走向量索引）與 cosine 排序等價。 */
 export interface Embedder {
   readonly dim: number;
   embed(text: string): Promise<number[]>;
