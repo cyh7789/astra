@@ -180,34 +180,44 @@ export class ChatSession {
 
   /** 每輪落庫（CockroachDB UPSERT）：任何終端 resume 即接續。digest/openThreads 待 §4.9 正式版。 */
   private async persist(now: Date): Promise<void> {
-    await this.store.saveSessionState(
-      {
-        userId: this.userId,
-        context: this.context,
-        turn: this.turn,
-        windowEntries: this.window.serialize(),
-        transcript: this.transcript,
-        digest: this.digest,
-        openThreads: this.openThreads,
-      },
-      now,
-    );
+    try {
+      await this.store.saveSessionState(
+        {
+          userId: this.userId,
+          context: this.context,
+          turn: this.turn,
+          windowEntries: this.window.serialize(),
+          transcript: this.transcript,
+          digest: this.digest,
+          openThreads: this.openThreads,
+        },
+        now,
+      );
+    } catch {
+      // DB 瞬斷：本輪狀態沒落盤 — persist 是全量 UPSERT，下輪成功即補上；回覆不能因此吞掉
+    }
   }
 
   async send(message: string, now = new Date()): Promise<SessionTurnResult> {
     this.turn++;
     this.window.beginTurn(this.turn, now);
-    // 新的使用者訊息 = 對上一輪被攔敏感操作的回應已到 → 解鎖（是否執行仍由模型解讀使用者意圖）
-    const unlockedThisTurn = new Set(this.pendingConfirm);
-    for (const t of this.pendingConfirm) this.confirmedTools.add(t);
-    this.pendingConfirm.clear();
+    const event = EVENT_RE.exec(message);
+    // 只有真使用者訊息才是對被攔敏感操作的回應 — 事件不是使用者，不解鎖（門鈴 ≠ 同意開門）；
+    // pendingConfirm 留到下一則真使用者訊息（是否執行仍由模型解讀使用者意圖）
+    const unlockedThisTurn = new Set<string>();
+    if (!event) {
+      for (const t of this.pendingConfirm) {
+        unlockedThisTurn.add(t);
+        this.confirmedTools.add(t);
+      }
+      this.pendingConfirm.clear();
+    }
     const admitted: SessionTurnResult["admitted"] = [];
 
     // 事件訊息（流動政策 §4.8：事件主體決定 scope）
-    const event = EVENT_RE.exec(message);
     if (event) {
       const query = this.eventQuery(event[2]!);
-      const hits = await this.store.recall({
+      const hits = await this.safeRecall({
         userId: this.userId,
         query,
         context: this.context,
@@ -219,7 +229,7 @@ export class ChatSession {
       this.admitScored(hits, "event", admitted, { ttlTurns: EVENT_TTL_TURNS });
     } else {
       // Layer 1 被動增量：θ gating，多數輪空手而回
-      let hits = await this.store.recall({
+      let hits = await this.safeRecall({
         userId: this.userId,
         query: message,
         context: this.context,
@@ -228,7 +238,7 @@ export class ChatSession {
         now,
       });
       if (hits.length === 0 && message.length < SHORT_QUERY_CHARS && this.lastUserMessage) {
-        hits = await this.store.recall({
+        hits = await this.safeRecall({
           userId: this.userId,
           query: `${this.lastUserMessage} ${message}`,
           context: this.context,
@@ -357,18 +367,27 @@ export class ChatSession {
             : "episodic";
         const targetContext =
           typeof action.args.context === "string" && action.args.context ? action.args.context : this.context;
-        const saved = await this.store.remember({
-          userId: this.userId,
-          context: targetContext,
-          memoryType,
-          content,
-          importance: typeof action.args.importance === "number" ? action.args.importance : 0.7,
-          expiresAt:
-            typeof action.args.expiresInHours === "number"
-              ? new Date(now.getTime() + action.args.expiresInHours * 3_600_000)
-              : undefined,
-          sourceContext: targetContext !== this.context ? this.context : undefined,
-        });
+        let saved: Memory;
+        try {
+          saved = await this.store.remember({
+            userId: this.userId,
+            context: targetContext,
+            memoryType,
+            content,
+            importance: typeof action.args.importance === "number" ? action.args.importance : 0.7,
+            expiresAt:
+              typeof action.args.expiresInHours === "number"
+                ? new Date(now.getTime() + action.args.expiresInHours * 3_600_000)
+                : undefined,
+            sourceContext: targetContext !== this.context ? this.context : undefined,
+          });
+        } catch {
+          working.push(
+            `(You): ${JSON.stringify(action)}`,
+            `TOOL_RESULT: ${JSON.stringify({ ok: false, error: "memory backend temporarily unavailable — tell the user you could not save it right now" })}`,
+          );
+          continue;
+        }
         this.window.admit(saved, { score: 0.8, turn: this.turn, via: "tool" });
         const result = { ok: true, saved: content, type: memoryType, context: targetContext };
         toolCalls.push({ tool: "save_memory", args: action.args, result });
@@ -387,15 +406,24 @@ export class ChatSession {
           continue;
         }
         const scope = action.args.scope === "all" ? "cross" : "scene";
-        const hits = await this.store.recall({
-          userId: this.userId,
-          query,
-          context: this.context,
-          scope,
-          minSim: MIN_VECTOR_SIM_INTENT,
-          topK: 5,
-          now,
-        });
+        let hits: ScoredMemory[];
+        try {
+          hits = await this.store.recall({
+            userId: this.userId,
+            query,
+            context: this.context,
+            scope,
+            minSim: MIN_VECTOR_SIM_INTENT,
+            topK: 5,
+            now,
+          });
+        } catch {
+          working.push(
+            `(You): ${JSON.stringify(action)}`,
+            `TOOL_RESULT: ${JSON.stringify({ ok: false, error: "memory backend temporarily unavailable — answer honestly without it" })}`,
+          );
+          continue;
+        }
         pendingToolHits.push(...hits);
         const result = {
           ok: true,
@@ -528,24 +556,37 @@ export class ChatSession {
   private async expandLinks(admitted: SessionTurnResult["admitted"], now: Date): Promise<void> {
     const newIds = admitted.filter((a) => a.via !== "link").map((a) => a.id);
     if (newIds.length === 0) return;
-    const links = await this.store.loadLinksFor(newIds);
-    const otherEnds = new Set<string>();
-    for (const l of links) {
-      for (const id of [l.sourceId, l.targetId]) {
-        if (!this.window.has(id)) otherEnds.add(id);
+    try {
+      const links = await this.store.loadLinksFor(newIds);
+      const otherEnds = new Set<string>();
+      for (const l of links) {
+        for (const id of [l.sourceId, l.targetId]) {
+          if (!this.window.has(id)) otherEnds.add(id);
+        }
       }
+      if (otherEnds.size === 0) return;
+      for (const m of await this.store.getMany([...otherEnds])) {
+        // 隱私仍守：link 對端若是場景外 private，不進窗
+        const visible =
+          m.context === this.context ||
+          m.context === "any" ||
+          m.privacyLevel !== "private";
+        if (!visible) continue;
+        if (m.expiresAt && m.expiresAt <= now) continue;
+        const isNew = this.window.admit(m, { score: LINK_SCORE, turn: this.turn, via: "link" });
+        if (isNew) admitted.push({ id: m.id, via: "link", content: m.content });
+      }
+    } catch {
+      // DB 瞬斷：link 擴展本輪跳過 — 主記憶已進窗，對端下輪再拉
     }
-    if (otherEnds.size === 0) return;
-    for (const m of await this.store.getMany([...otherEnds])) {
-      // 隱私仍守：link 對端若是場景外 private，不進窗
-      const visible =
-        m.context === this.context ||
-        m.context === "any" ||
-        m.privacyLevel !== "private";
-      if (!visible) continue;
-      if (m.expiresAt && m.expiresAt <= now) continue;
-      const isNew = this.window.admit(m, { score: LINK_SCORE, turn: this.turn, via: "link" });
-      if (isNew) admitted.push({ id: m.id, via: "link", content: m.content });
+  }
+
+  /** DB 瞬斷時記憶層退化為空手 — 對話不死，事實下輪再撈。 */
+  private async safeRecall(q: Parameters<MemoryStore["recall"]>[0]): Promise<ScoredMemory[]> {
+    try {
+      return await this.store.recall(q);
+    } catch {
+      return [];
     }
   }
 
@@ -575,7 +616,8 @@ export class ChatSession {
         annotations: [],
       })),
       { currentContext: this.context, now },
-      { loadContradictsLinks: (ids) => this.store.loadContradictsLinks(ids) },
+      // DB 瞬斷：矛盾標注本輪缺席可接受，prompt 照出
+      { loadContradictsLinks: (ids) => this.store.loadContradictsLinks(ids).catch(() => []) },
     );
     const viaById = new Map(entries.map((e) => [e.memory.id, e.via]));
     return buildSessionPrompt(this.context, guarded, viaById, tools);
