@@ -288,6 +288,9 @@ try {
       check("S12-3 不誤報 119", !t.toolCalls.some((c) => c.tool === "emergency_call"));
     }
   }
+} catch (e) {
+  // 單輪崩潰（API 風暴 retry 耗盡等）→ 顯式失敗檢查，SPIKE_JSON 照吐、已完成的數據不丟
+  check(`run 中斷：${(e as Error).message.slice(0, 80)}`, false);
 } finally {
   await db.drop();
 }

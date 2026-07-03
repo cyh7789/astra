@@ -21,7 +21,9 @@ export class GeminiClient implements LlmClient {
   }
 
   async complete(systemPrompt: string, userMessage: string): Promise<string> {
-    // free tier 限流常態：429 等 20s 重試最多兩次，不夠再說
+    // free tier 限流/500 風暴常態：指數退避 10s→20s→40s→80s（連續轟炸時段 2×20s 扛不住，
+    // 7/5 穩定性 eval 驗屍實證）。GEMINI_RETRIES 可調。
+    const maxRetries = Number(process.env.GEMINI_RETRIES ?? 4);
     for (let attempt = 0; ; attempt++) {
       const res = await fetch(
         `https://generativelanguage.googleapis.com/v1beta/models/${this.model}:generateContent`,
@@ -37,9 +39,9 @@ export class GeminiClient implements LlmClient {
           }),
         },
       );
-      // 429 = 限流、503 = 高需求、500 = 服務端暫時錯誤 — 等 20s 重試
-      if ([429, 500, 503].includes(res.status) && attempt < 2) {
-        await new Promise((r) => setTimeout(r, 20_000));
+      // 429 = 限流、503 = 高需求、500 = 服務端暫時錯誤 — 指數退避重試
+      if ([429, 500, 503].includes(res.status) && attempt < maxRetries) {
+        await new Promise((r) => setTimeout(r, 10_000 * 2 ** attempt));
         continue;
       }
       if (!res.ok) {
