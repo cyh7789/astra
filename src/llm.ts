@@ -11,8 +11,9 @@ export interface LlmClient {
 export class GeminiClient implements LlmClient {
   private readonly apiKey: string;
 
+  // 預設 3.1-flash-lite：free tier 額度最寬、行為約束驗證夠用（GEMINI_MODEL 可切 gemini-3.5-flash）
   constructor(
-    private readonly model = "gemini-2.5-flash",
+    private readonly model = process.env.GEMINI_MODEL ?? "gemini-3.1-flash-lite",
     apiKey = process.env.GEMINI_API_KEY,
   ) {
     if (!apiKey) throw new Error("GEMINI_API_KEY not set");
@@ -36,7 +37,8 @@ export class GeminiClient implements LlmClient {
           }),
         },
       );
-      if (res.status === 429 && attempt < 2) {
+      // 429 = 限流、503 = 模型高需求，都是暫時性 — 等 20s 重試
+      if ((res.status === 429 || res.status === 503) && attempt < 2) {
         await new Promise((r) => setTimeout(r, 20_000));
         continue;
       }
