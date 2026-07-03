@@ -3,6 +3,8 @@ import type { FusionWeights } from "./config.js";
 import { CANDIDATE_LIMIT, DEFAULT_FUSION_WEIGHTS } from "./config.js";
 import { encodeVector } from "./db.js";
 import type { Embedder } from "./embedder.js";
+import type { ContradictsLink, GuardedMemory, RecallGuard } from "./guards.js";
+import { applyGuards, DEFAULT_GUARDS, toGuarded } from "./guards.js";
 import { bm25Scores, fuse, minMaxNormalize, recencyScore } from "./retrieval.js";
 import { tokenize } from "./text.js";
 
@@ -215,5 +217,46 @@ export class MemoryStore {
       );
     }
     return scored;
+  }
+
+  /** 建立記憶關係邊（Phase 4 萃取器偵測到矛盾/更新時呼叫；seed 手動建）。 */
+  async link(
+    sourceId: string,
+    targetId: string,
+    relation: "contradicts" | "updates" | "supports" | "caused_by",
+  ): Promise<void> {
+    await this.pool.query(
+      "INSERT INTO memory_links (source_id, target_id, relation) VALUES ($1, $2, $3)",
+      [sourceId, targetId, relation],
+    );
+  }
+
+  async loadContradictsLinks(ids: string[]): Promise<ContradictsLink[]> {
+    if (ids.length === 0) return [];
+    const r = await this.pool.query(
+      `SELECT source_id, target_id FROM memory_links
+       WHERE relation = 'contradicts'
+         AND source_id = ANY($1::uuid[])
+         AND target_id = ANY($1::uuid[])`,
+      [ids],
+    );
+    return r.rows.map((row) => ({
+      sourceId: row.source_id as string,
+      targetId: row.target_id as string,
+    }));
+  }
+
+  /** recall + guard chain：agent 與 demo UI 的標準入口，回傳帶安全標注。 */
+  async recallGuarded(
+    q: RecallQuery,
+    guards: RecallGuard[] = DEFAULT_GUARDS,
+  ): Promise<GuardedMemory[]> {
+    const memories = await this.recall(q);
+    return applyGuards(
+      guards,
+      toGuarded(memories),
+      { currentContext: q.context, now: q.now ?? new Date() },
+      { loadContradictsLinks: (ids) => this.loadContradictsLinks(ids) },
+    );
   }
 }

@@ -93,6 +93,23 @@ export function demoMemories(now: Date): Array<MemoryInput & { key: string }> {
       sourceContext: "driving",
       createdAt: new Date(now.getTime() - 7 * d),
     },
+    // 衝突情境（ConflictGuard demo）：長期偏好 vs 昨天的行為互相矛盾
+    {
+      key: "no-spicy",
+      userId: DEMO_USER,
+      context: "home",
+      memoryType: "semantic",
+      content: "不吃辣，上次吃辣腸胃不舒服",
+      createdAt: new Date(now.getTime() - 10 * d),
+    },
+    {
+      key: "hotpot-order",
+      userId: DEMO_USER,
+      context: "home",
+      memoryType: "episodic",
+      content: "昨天晚餐點了麻辣鍋外送，說很滿足",
+      createdAt: new Date(now.getTime() - 1 * d),
+    },
   ];
 }
 
@@ -105,6 +122,8 @@ export async function seed(
     const m = await store.remember(input);
     ids.set(key, m.id);
   }
+  // 矛盾邊：Phase 4 由萃取器在寫入時偵測建立，demo 資料手動建
+  await store.link(ids.get("no-spicy")!, ids.get("hotpot-order")!, "contradicts");
   return ids;
 }
 
