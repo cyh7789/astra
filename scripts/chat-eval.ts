@@ -2,7 +2,7 @@
  *  走 ChatSession（提交版路徑：英文 system prompt + 記憶窗 + 工具迴圈），含多輪與場景切換題。
  *  demo 前與每次改 prompt 後跑。預設 Gemini free tier（EVAL_LLM=claude 切 claude CLI）。
  *  跑法：EMBEDDER=voyage npx tsx scripts/chat-eval.ts */
-import { selectEmbedder } from "../src/embedder-select.js";
+import { selectEmbedder, selectReranker } from "../src/embedder-select.js";
 import { ClaudeCliClient, GeminiClient } from "../src/llm.js";
 import { DEMO_USER, seed } from "../src/seed.js";
 import { ChatSession } from "../src/session.js";
@@ -126,7 +126,7 @@ console.error(`eval llm: ${llm.constructor.name} / embedder: ${process.env.EMBED
 const db = await createTestDb();
 let failed = 0;
 try {
-  const store = new MemoryStore(db.pool, selectEmbedder());
+  const store = new MemoryStore(db.pool, selectEmbedder(), selectReranker());
   await seed(store, NOW);
 
   for (const c of CASES) {

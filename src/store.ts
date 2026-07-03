@@ -6,6 +6,7 @@ import type { Embedder } from "./embedder.js";
 import type { ContradictsLink, GuardedMemory, RecallGuard } from "./guards.js";
 import { applyGuards, DEFAULT_GUARDS, toGuarded } from "./guards.js";
 import type { PersistedWindowEntry } from "./memory-window.js";
+import type { Reranker } from "./reranker.js";
 import { bm25Scores, fuse, minMaxNormalize, recencyScore } from "./retrieval.js";
 import { tokenize } from "./text.js";
 
@@ -71,7 +72,12 @@ export interface SessionState {
 export interface ScoredMemory extends Candidate {
   signals: { vector: number; bm25: number; recency: number };
   score: number;
+  /** 精排分（有掛 reranker 才有）— 校準比 cosine 好，demo UI 透明度展示用 */
+  rerankScore?: number;
 }
+
+/** 精排取樣寬度：融合粗排的前 N 送 reranker（一次 API call），再取 topK */
+const RERANK_POOL = 24;
 
 const MEMORY_COLS = `id, user_id, context, memory_type, content, importance,
   privacy_level, access_count, created_at, last_accessed, expires_at, source_context`;
@@ -97,6 +103,7 @@ export class MemoryStore {
   constructor(
     private readonly pool: pg.Pool,
     private readonly embedder: Embedder,
+    private readonly reranker?: Reranker,
   ) {}
 
   async remember(input: MemoryInput): Promise<Memory> {
@@ -222,7 +229,7 @@ export class MemoryStore {
     };
     const fused = fuse(signals, weights);
 
-    const scored: ScoredMemory[] = candidates
+    let scored: ScoredMemory[] = candidates
       .map((c, i) => ({
         ...c,
         signals: {
@@ -232,8 +239,25 @@ export class MemoryStore {
         },
         score: fused[i]!,
       }))
-      .sort((a, b) => b.score - a.score)
-      .slice(0, topK);
+      .sort((a, b) => b.score - a.score);
+
+    // 精排（可選）：融合粗排前 RERANK_POOL 送 reranker，取回校準過的相關性排序。
+    // failure-safe：reranker 掛掉退回融合排序，檢索不因外部服務中斷。
+    if (this.reranker && scored.length > 1) {
+      const pool = scored.slice(0, RERANK_POOL);
+      try {
+        const hits = await this.reranker.rerank(
+          q.query,
+          pool.map((m) => m.content),
+          Math.min(topK, pool.length),
+        );
+        scored = hits.map((h) => ({ ...pool[h.index]!, rerankScore: h.score }));
+      } catch {
+        scored = scored.slice(0, topK);
+      }
+    } else {
+      scored = scored.slice(0, topK);
+    }
 
     if (scored.length > 0) {
       await this.pool.query(

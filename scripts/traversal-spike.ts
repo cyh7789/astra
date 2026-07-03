@@ -4,7 +4,7 @@
  *  S3 場景切換交接浮現（車上說的事回家主動提）+ 隱私 carry-over
  *  S4 INCOMING_CALL 事件跨 scope 簡報（回家路上王經理來電）
  *  跑法：EMBEDDER=voyage GEMINI_MODEL=gemma-4-31b-it npx tsx scripts/traversal-spike.ts */
-import { selectEmbedder } from "../src/embedder-select.js";
+import { selectEmbedder, selectReranker } from "../src/embedder-select.js";
 import { GeminiClient } from "../src/llm.js";
 import { DEMO_USER, seed } from "../src/seed.js";
 import { ChatSession } from "../src/session.js";
@@ -35,7 +35,7 @@ function show(label: string, r: { reply: string; toolCalls: Array<{ tool: string
 
 const db = await createTestDb();
 try {
-  const store = new MemoryStore(db.pool, selectEmbedder());
+  const store = new MemoryStore(db.pool, selectEmbedder(), selectReranker());
   const ids = await seed(store);
   const byKey = (k: string) => ids.get(k)!;
 
