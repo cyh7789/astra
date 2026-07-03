@@ -1,0 +1,4 @@
+node_modules/
+.astra-data/
+*.log
+.env
