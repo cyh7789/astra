@@ -129,6 +129,15 @@ export function demoMemories(now: Date): Array<MemoryInput & { key: string }> {
       importance: 0.8,
       createdAt: new Date(now.getTime() - 30 * d),
     },
+    {
+      key: "away-routine",
+      userId: DEMO_USER,
+      context: "home",
+      memoryType: "procedural",
+      content: "離家流程：關掉全部的燈和冷氣、保全切離家模式、掃地機器人開始打掃全屋",
+      importance: 0.8,
+      createdAt: new Date(now.getTime() - 30 * d),
+    },
     // 衝突情境（ConflictGuard demo）：長期偏好 vs 昨天的行為互相矛盾
     {
       key: "no-spicy",

@@ -492,7 +492,7 @@ export class ChatSession {
   private eventQuery(payloadRaw: string): string {
     try {
       const payload = JSON.parse(payloadRaw) as Record<string, unknown>;
-      const parts = ["from", "subject", "preview"]
+      const parts = ["from", "subject", "preview", "type", "event", "room", "detail"]
         .map((k) => payload[k])
         .filter((v): v is string => typeof v === "string");
       return `${parts.join(", ")} — last discussions, background, todos and preferences`;
@@ -598,9 +598,9 @@ export function buildSessionPrompt(
     "Lines at the top of the conversation like (Earlier summary: …) and (Open: …) are condensed earlier conversation: use them to stay continuous, and follow up on open items at a fitting moment.",
     "",
     "## Event rules",
-    'A message starting with "VEHICLE_EVENT:" is a vehicle system event (not the user speaking): for safety events (airbag_deployed, collision), first reply to check on the user; if "USER_NO_RESPONSE" follows, treat it as a major accident — immediately emergency_call (119) and notify the emergency contact found in memory, no confirmation needed.',
+    'A message starting with "VEHICLE_EVENT:" is a vehicle system event (not the user speaking): for safety events (airbag_deployed, collision), first reply to check on the user; if "USER_NO_RESPONSE" follows, treat it as a major accident — immediately emergency_call (119) and notify the emergency contact found in memory, no confirmation needed. For non-safety events (low_fuel, service_due), inform the user and suggest a concrete action (e.g., search_poi for a gas station on the route, using their preferences from memory).',
     'A message starting with "INCOMING_CALL:" or "INCOMING_EMAIL:" is a call/email event (not the user speaking): announce who it is, brief the user in one line using the [event] memories (what was last discussed, what to watch for), then ask whether to answer/reply. Never answer on your own.',
-    'A message starting with "HOME_EVENT:" is a home system event (not the user speaking): for hazard events (smoke_detected, gas_leak), act immediately to reduce danger first (e.g., set_outlet off for the suspect appliance), then warn the user and ask if they are okay; if "USER_NO_RESPONSE" follows or the hazard is confirmed spreading, emergency_call (119) immediately, no confirmation needed. If the user says it is a false alarm, do not escalate — give practical advice instead.',
+    'A message starting with "HOME_EVENT:" is a home system event (not the user speaking): for hazard events (smoke_detected, gas_leak), act immediately to reduce danger first (e.g., set_outlet off for the suspect appliance), then warn the user and ask if they are okay; if "USER_NO_RESPONSE" follows or the hazard is confirmed spreading, emergency_call (119) immediately, no confirmation needed. If the user says it is a false alarm, do not escalate — give practical advice instead. For doorbell events, announce the visitor; never unlock the door without explicit user approval. For geofence events (geofence_exit = user left home, geofence_enter = user arriving), run the matching routine from memory if one exists.',
     'A message starting with "CALENDAR_EVENT:" is a schedule event (not the user speaking), e.g. a departure reminder computed from the calendar and travel time: brief the user on the appointment using the [event] memories, tell them when to leave, and offer helpful actions available in the current scene (e.g., start navigation in the car).',
     "",
     "Reply in the same language the user speaks. For Chinese, use Traditional Chinese (Taiwan usage) only — simplified characters are strictly forbidden. Be conversational and concise, like a close companion, not customer service.",

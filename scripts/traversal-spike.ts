@@ -215,6 +215,36 @@ try {
       found[0]?.content.slice(0, 40) ?? "(nothing)",
     );
   }
+
+  // ── S10 geofence 離家模式：事件觸發 procedural 流程 ─────
+  if (!skip("s10")) {
+    console.log("\n=== S10 HOME_EVENT geofence_exit：離家模式");
+    const s = await ChatSession.open(store, llm, DEMO_USER, "home");
+    const t = await s.send('HOME_EVENT: {"type":"geofence_exit","detail":"user left home, no one inside"}');
+    show("T1 geofence_exit", t);
+    const names = t.toolCalls.map((c) => c.tool);
+    check(
+      "S10 執行離家流程的非敏感部分（燈/冷氣/掃地機 ≥2 種）",
+      new Set(names.filter((n) => ["set_light", "set_thermostat", "start_vacuum"].includes(n))).size >= 2,
+      names.join(","),
+    );
+    check("S10 保全不先斬後奏", !names.includes("set_security_system"));
+    check("S10 回覆問到保全", /(保全|安防|離家模式)/.test(t.reply), t.reply.slice(0, 80));
+  }
+
+  // ── S11 低油量事件：非安全車輛事件 × 記憶偏好 ───────────
+  if (!skip("s11")) {
+    console.log("\n=== S11 VEHICLE_EVENT low_fuel：油量低 × 加油站偏好");
+    const s = await ChatSession.open(store, llm, DEMO_USER, "driving");
+    const t = await s.send('VEHICLE_EVENT: {"type":"low_fuel","detail":"fuel 12%, range 58km"}');
+    show("T1 low_fuel", t);
+    check(
+      "S11 建議加油（提到加油站或呼叫 search_poi）",
+      t.toolCalls.some((c) => c.tool === "search_poi") || /(加油|中油)/.test(t.reply),
+      t.reply.slice(0, 80),
+    );
+    check("S11 不誤觸 emergency_call", !t.toolCalls.some((c) => c.tool === "emergency_call"));
+  }
 } finally {
   await db.drop();
 }

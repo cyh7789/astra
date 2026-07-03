@@ -99,6 +99,32 @@ const driving: DeviceTool[] = [
     execute: () => ({ ok: true, fuel_percent: 23, range_km: 118 }),
   },
   {
+    name: "set_window",
+    context: "driving",
+    description: "Control car windows",
+    argsSpec: '{"side": "driver"|"passenger"|"rear"|"all", "position": integer 0-100 (0=closed)}',
+    validate: (a) => {
+      if (!["driver", "passenger", "rear", "all"].includes(a.side as string))
+        return "side must be one of driver/passenger/rear/all";
+      if (!intIn(a.position, 0, 100)) return "position must be an integer 0-100";
+      return null;
+    },
+    execute: (a) => ({ ok: true, device: "window", side: a.side, position: a.position }),
+  },
+  {
+    name: "set_seat_heater",
+    context: "driving",
+    description: "Control seat heating",
+    argsSpec: '{"seat": "driver"|"passenger", "level": integer 0-3 (0=off)}',
+    validate: (a) => {
+      if (!["driver", "passenger"].includes(a.seat as string))
+        return "seat must be driver or passenger";
+      if (!intIn(a.level, 0, 3)) return "level must be an integer 0-3";
+      return null;
+    },
+    execute: (a) => ({ ok: true, device: "seat_heater", seat: a.seat, level: a.level }),
+  },
+  {
     name: "get_weather",
     context: "driving",
     description: "Check the weather (destination or current location)",
@@ -192,13 +218,38 @@ const home: DeviceTool[] = [
     execute: (a) => ({ ok: true, device: "outlet", name: a.name, on: a.on }),
   },
   {
+    name: "set_water_heater",
+    context: "home",
+    description: "Control the water heater",
+    argsSpec: '{"on": true|false, "targetTemperature": integer 35-60 (optional)}',
+    validate: (a) => {
+      if (typeof a.on !== "boolean") return "on must be a boolean";
+      if (a.targetTemperature !== undefined && !intIn(a.targetTemperature, 35, 60))
+        return "targetTemperature must be an integer 35-60";
+      return null;
+    },
+    execute: (a) => ({ ok: true, device: "water_heater", on: a.on, targetTemperature: a.targetTemperature ?? 42 }),
+  },
+  {
+    name: "start_vacuum",
+    context: "home",
+    description: "Start/stop the robot vacuum",
+    argsSpec: '{"action": "start"|"stop"|"dock", "rooms": ["room name", ...] (optional = whole home)}',
+    validate: (a) =>
+      ["start", "stop", "dock"].includes(a.action as string)
+        ? null
+        : "action must be one of start/stop/dock",
+    execute: (a) => ({ ok: true, device: "vacuum", action: a.action, rooms: a.rooms ?? "all" }),
+  },
+  {
     name: "read_sensors",
     context: "home",
     description: "Read home sensors (temperature/humidity/air quality/motion, HomeKit Sensors)",
-    argsSpec: "{} (no args)",
+    argsSpec: '{"room": "room name (optional = whole home)"}',
     validate: () => null,
-    execute: () => ({
+    execute: (a) => ({
       ok: true,
+      room: a.room ?? "all",
       temperature_c: 29.5,
       humidity_percent: 78,
       air_quality: "fair",
