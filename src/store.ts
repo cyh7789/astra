@@ -5,6 +5,7 @@ import { encodeVector } from "./db.js";
 import type { Embedder } from "./embedder.js";
 import type { ContradictsLink, GuardedMemory, RecallGuard } from "./guards.js";
 import { applyGuards, DEFAULT_GUARDS, toGuarded } from "./guards.js";
+import type { PersistedWindowEntry } from "./memory-window.js";
 import { bm25Scores, fuse, minMaxNormalize, recencyScore } from "./retrieval.js";
 import { tokenize } from "./text.js";
 
@@ -53,6 +54,18 @@ export interface RecallQuery {
 
 export interface Candidate extends Memory {
   vectorSim: number;
+}
+
+/** 對話工作集持久化（§4.6）：跨終端 resume 的載體。 */
+export interface SessionState {
+  userId: string;
+  context: string;
+  turn: number;
+  windowEntries: PersistedWindowEntry[];
+  transcript: string[];
+  digest: string;
+  openThreads: unknown[];
+  updatedAt: Date;
 }
 
 export interface ScoredMemory extends Candidate {
@@ -274,6 +287,7 @@ export class MemoryStore {
          AND source_context IS NOT NULL AND source_context != $2
          AND (expires_at IS NULL OR expires_at > $3)
          AND created_at > $3::timestamptz - INTERVAL '14 days'
+         AND surfaced_at IS NULL
        ORDER BY importance DESC
        LIMIT 3`,
       [userId, context, now],
@@ -294,6 +308,54 @@ export class MemoryStore {
       [userId, now],
     );
     return r.rows.map(rowToMemory);
+  }
+
+  /** 交接浮現後標記，防重複嘮叨（§4.5）。 */
+  async markSurfaced(ids: string[], now = new Date()): Promise<void> {
+    if (ids.length === 0) return;
+    await this.pool.query(`UPDATE memories SET surfaced_at = $2 WHERE id = ANY($1::uuid[])`, [
+      ids,
+      now,
+    ]);
+  }
+
+  /** 每輪 UPSERT 工作集狀態 — CockroachDB 原生 UPSERT，任何終端 load 即接續（§4.6）。 */
+  async saveSessionState(s: Omit<SessionState, "updatedAt">, now = new Date()): Promise<void> {
+    await this.pool.query(
+      `UPSERT INTO session_state
+         (user_id, context, turn, window_entries, transcript, digest, open_threads, updated_at)
+       VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6, $7::jsonb, $8)`,
+      [
+        s.userId,
+        s.context,
+        s.turn,
+        JSON.stringify(s.windowEntries),
+        JSON.stringify(s.transcript),
+        s.digest,
+        JSON.stringify(s.openThreads),
+        now,
+      ],
+    );
+  }
+
+  async loadSessionState(userId: string): Promise<SessionState | null> {
+    const r = await this.pool.query(
+      `SELECT user_id, context, turn, window_entries, transcript, digest, open_threads, updated_at
+       FROM session_state WHERE user_id = $1`,
+      [userId],
+    );
+    const row = r.rows[0];
+    if (!row) return null;
+    return {
+      userId: row.user_id as string,
+      context: row.context as string,
+      turn: row.turn as number,
+      windowEntries: row.window_entries as PersistedWindowEntry[],
+      transcript: row.transcript as string[],
+      digest: row.digest as string,
+      openThreads: row.open_threads as unknown[],
+      updatedAt: row.updated_at as Date,
+    };
   }
 
   async loadContradictsLinks(ids: string[]): Promise<ContradictsLink[]> {

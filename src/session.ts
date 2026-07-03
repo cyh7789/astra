@@ -24,6 +24,9 @@ const SHORT_QUERY_CHARS = 10; // 被動空手 + 短訊息 → 併前句重試（
 
 const EVENT_RE = /^(INCOMING_CALL|INCOMING_EMAIL):\s*(\{.*\})/s;
 
+/** 邊界重打分（§4.9）：gap 超過此值視為冷 resume，窗要冷卻。 */
+const RESUME_WARM_GAP_MINUTES = 30;
+
 export interface SessionTurnResult {
   reply: string;
   toolCalls: Array<{ tool: string; args: Record<string, unknown>; result: Record<string, unknown> }>;
@@ -34,10 +37,9 @@ export interface SessionTurnResult {
 }
 
 export class ChatSession {
-  readonly window = new MemoryWindow();
+  window = new MemoryWindow();
   private turn = 0;
   private transcript: string[] = [];
-  private surfacedIds = new Set<string>(); // PoC：surfaced_at 欄位的 session 內替代
   private confirmedTools = new Set<string>();
   private lastUserMessage = "";
 
@@ -61,6 +63,37 @@ export class ChatSession {
     return s;
   }
 
+  /** 跨終端/跨 session 接續（§4.6 + §4.9）：載回工作集、按 gap 冷卻。
+   *  沒有既存 session 回 null（呼叫端 fallback 到 open）。 */
+  static async resume(
+    store: MemoryStore,
+    llm: LlmClient,
+    userId: string,
+    now = new Date(),
+  ): Promise<ChatSession | null> {
+    const state = await store.loadSessionState(userId);
+    if (!state) return null;
+
+    const memories = await store.getMany(state.windowEntries.map((e) => e.memoryId));
+    const byId = new Map(
+      memories
+        .filter((m) => !m.expiresAt || m.expiresAt > now) // 過期記憶不復位
+        .map((m) => [m.id, m]),
+    );
+    const s = new ChatSession(store, llm, userId, state.context);
+    s.turn = state.turn;
+    s.transcript = state.transcript;
+    s.window = MemoryWindow.restore(state.windowEntries, byId);
+    const lastUser = [...state.transcript].reverse().find((l) => l.startsWith("使用者："));
+    s.lastUserMessage = lastUser?.slice("使用者：".length) ?? "";
+
+    const gapMinutes = (now.getTime() - state.updatedAt.getTime()) / 60_000;
+    if (gapMinutes > RESUME_WARM_GAP_MINUTES) {
+      s.window.cool(gapMinutes / 60); // 長 gap：冷卻退場；短 gap（換終端）：全量接續
+    }
+    return s;
+  }
+
   /** 場景切換（§4.5）：隱私 carry-over → 換場景 → pin + 交接浮現。 */
   async switchContext(
     newContext: string,
@@ -70,6 +103,7 @@ export class ChatSession {
     this.context = newContext;
     this.transcript.push(`系統：場景切換 → ${newContext}`);
     const surfaced = await this.enterScene(now);
+    await this.persist(now);
     return { surfaced, evicted };
   }
 
@@ -79,12 +113,28 @@ export class ChatSession {
     }
     const surfaced: Memory[] = [];
     for (const m of await this.store.handoffCandidates(this.userId, this.context, now)) {
-      if (this.surfacedIds.has(m.id)) continue;
-      this.surfacedIds.add(m.id);
       this.window.admit(m, { score: Math.max(m.importance, 0.6), turn: this.turn, via: "handoff" });
       surfaced.push(m);
     }
+    // DB 層去重（surfaced_at）：跨 session、跨終端都不重複嘮叨
+    await this.store.markSurfaced(surfaced.map((m) => m.id), now);
     return surfaced;
+  }
+
+  /** 每輪落庫（CockroachDB UPSERT）：任何終端 resume 即接續。digest/openThreads 待 §4.9 正式版。 */
+  private async persist(now: Date): Promise<void> {
+    await this.store.saveSessionState(
+      {
+        userId: this.userId,
+        context: this.context,
+        turn: this.turn,
+        windowEntries: this.window.serialize(),
+        transcript: this.transcript,
+        digest: "",
+        openThreads: [],
+      },
+      now,
+    );
   }
 
   async send(message: string, now = new Date()): Promise<SessionTurnResult> {
@@ -155,6 +205,7 @@ export class ChatSession {
         this.transcript.push(`使用者：${message}`, `（你）：${action.text}`);
         this.compactTranscript();
         await this.finishTurn(pendingToolHits, admitted, now);
+        await this.persist(now);
         return {
           reply: action.text,
           toolCalls,
@@ -238,6 +289,7 @@ export class ChatSession {
     this.transcript.push(`使用者：${message}`);
     this.compactTranscript();
     await this.finishTurn(pendingToolHits, admitted, now);
+    await this.persist(now);
     return {
       reply: "（操作中斷：連續動作過多，請再說一次你要做什麼）",
       toolCalls,

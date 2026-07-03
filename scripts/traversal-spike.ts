@@ -72,6 +72,8 @@ try {
   // ── S3 場景切換：driving → home 交接浮現 + 隱私 carry-over ──
   console.log("\n=== S3 場景切換：車上→到家，交接浮現氣炸鍋");
   {
+    // S1 的 open(home) 已消耗過交接浮現（surfaced_at DB 層去重）— spike 劇本間重置
+    await db.pool.query("UPDATE memories SET surfaced_at = NULL");
     const s = await ChatSession.open(store, llm, DEMO_USER, "driving");
     const t1 = await s.send("我出發回家囉");
     show("T1（driving）我出發回家囉", t1);
@@ -98,6 +100,22 @@ try {
     );
     check("S4 回覆含簡報內容（報價/維護費/季付）", /45,?000|報價|維護|季付/.test(t1.reply), t1.reply.slice(0, 80));
     check("S4 詢問是否接聽而非擅自接", /接/.test(t1.reply));
+  }
+
+  // ── S5 跨終端接續：車機聊到一半 → 家中終端 resume 續聊 ──
+  console.log("\n=== S5 跨終端接續：車上交代的事，回家問「剛剛說到哪」");
+  {
+    const carHead = await ChatSession.open(store, llm, DEMO_USER, "driving");
+    const t1 = await carHead.send("到家之後記得提醒我傳季度報告給李協理，很重要");
+    show("T1（車機）提醒我傳報告給李協理", t1);
+
+    // 換終端：家中音箱 resume（5 分鐘後 — 對話工作集從 CockroachDB 拉回）
+    const speaker = await ChatSession.resume(store, llm, DEMO_USER, new Date(Date.now() + 5 * 60_000));
+    check("S5 家中終端 resume 成功", speaker !== null);
+    await speaker!.switchContext("home");
+    const t2 = await speaker!.send("我到家了，剛剛車上說到哪？");
+    show("T2（家中音箱）剛剛車上說到哪？", t2);
+    check("S5 跨終端記得話題（報告/李協理）", /報告|李協理/.test(t2.reply), t2.reply.slice(0, 80));
   }
 } finally {
   await db.drop();

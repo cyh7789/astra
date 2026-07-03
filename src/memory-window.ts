@@ -24,6 +24,17 @@ export interface AdmitOptions {
   ttlTurns?: number;
 }
 
+/** 持久化格式（session_state.window_entries）：只存 id + 元資料，內容留在 memories 表。 */
+export interface PersistedWindowEntry {
+  memoryId: string;
+  score: number;
+  enteredTurn: number;
+  lastRelevantTurn: number;
+  pinned: boolean;
+  via: WindowVia;
+  expiresTurn?: number;
+}
+
 export class MemoryWindow {
   private byId = new Map<string, WindowEntry>();
 
@@ -100,6 +111,55 @@ export class MemoryWindow {
     let total = 0;
     for (const e of this.byId.values()) total += e.memory.content.length;
     return total;
+  }
+
+  serialize(): PersistedWindowEntry[] {
+    return [...this.byId.values()].map((e) => ({
+      memoryId: e.memory.id,
+      score: e.score,
+      enteredTurn: e.enteredTurn,
+      lastRelevantTurn: e.lastRelevantTurn,
+      pinned: e.pinned,
+      via: e.via,
+      ...(e.expiresTurn !== undefined ? { expiresTurn: e.expiresTurn } : {}),
+    }));
+  }
+
+  /** 從持久化狀態重建：memoriesById 由呼叫端先過濾（刪除/過期不進）。 */
+  static restore(
+    persisted: PersistedWindowEntry[],
+    memoriesById: Map<string, Memory>,
+  ): MemoryWindow {
+    const w = new MemoryWindow();
+    for (const p of persisted) {
+      const memory = memoriesById.get(p.memoryId);
+      if (!memory) continue;
+      w.byId.set(p.memoryId, {
+        memory,
+        score: p.score,
+        enteredTurn: p.enteredTurn,
+        lastRelevantTurn: p.lastRelevantTurn,
+        pinned: p.pinned,
+        via: p.via,
+        expiresTurn: p.expiresTurn,
+      });
+    }
+    return w;
+  }
+
+  /** 邊界重打分（§4.9）：長 gap 後冷卻 — score × 2^(-gap/halfLife)，非 pinned 低於 floor 退場。
+   *  同一套指數衰減思想在邊界重跑，不另發明規則。回傳被冷卻退場的條目。 */
+  cool(gapHours: number, halfLifeHours = 24, floor = 0.2): WindowEntry[] {
+    const dropped: WindowEntry[] = [];
+    const decay = 2 ** (-gapHours / halfLifeHours);
+    for (const [id, e] of this.byId) {
+      e.score *= decay;
+      if (!e.pinned && e.score < floor) {
+        dropped.push(e);
+        this.byId.delete(id);
+      }
+    }
+    return dropped;
   }
 
   /** 超容量/超字數 → 淘汰 lastRelevantTurn 最舊者，同齡淘汰 score 低者。pinned 豁免。 */
