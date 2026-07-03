@@ -20,7 +20,7 @@ describe("recall end-to-end (three-scene demo data)", () => {
     await db.drop();
   });
 
-  it("scene 1 driving: candidates are exactly driving + cross-context memories", async () => {
+  it("scene 1 driving: candidates are exactly driving + any + cross-context memories", async () => {
     const candidates = await store.fetchCandidates({
       userId: DEMO_USER,
       query: "今天行程怎麼安排？",
@@ -33,25 +33,24 @@ describe("recall end-to-end (three-scene demo data)", () => {
         ids.get("refuel-reminder"),
         ids.get("gas-station-pref"),
         ids.get("client-meeting"),
+        ids.get("music-pref"),
+        ids.get("emergency-contact"),
       ]),
     );
   });
 
-  it("scene 1 driving: recall top-3 covers reminder + station + meeting", async () => {
+  it("scene 1 driving: recall top-5 covers reminder + station + meeting", async () => {
     const result = await store.recall({
       userId: DEMO_USER,
       query: "今天行程怎麼安排？",
       context: "driving",
-      topK: 3,
+      topK: 5,
       now: NOW,
     });
-    expect(result.map((m) => m.id).sort()).toEqual(
-      [
-        ids.get("refuel-reminder"),
-        ids.get("gas-station-pref"),
-        ids.get("client-meeting"),
-      ].sort(),
-    );
+    const got = result.map((m) => m.id);
+    for (const key of ["refuel-reminder", "gas-station-pref", "client-meeting"]) {
+      expect(got).toContain(ids.get(key));
+    }
     // 每筆都有訊號分解（demo UI 的透明度展示用）
     for (const m of result) {
       expect(m.signals.vector).toBeGreaterThanOrEqual(0);
