@@ -27,6 +27,8 @@ export interface SessionOptions {
   transcriptKeep?: number;
   /** 每輪萃取寫回記憶（預設開；測試可關以隔離行為） */
   extract?: boolean;
+  /** 動態路由 v1（#25）：本地模型收斂失敗時接手同一輪的強模型（如 Bedrock Claude） */
+  strongLlm?: LlmClient;
 }
 
 /** digest 只扛「聊到哪、剛決定什麼」的對話態；個人事實歸記憶層（§4.9 分工）。
@@ -54,6 +56,21 @@ export interface SessionTurnResult {
   admitted: Array<{ id: string; via: WindowVia; content: string }>;
   windowSize: number;
   turns: number;
+  /** 本輪是否升級到強模型（demo 透明度展示） */
+  escalated: boolean;
+}
+
+interface LoopCtx {
+  system: string;
+  working: string[];
+  tools: DeviceTool[];
+  toolCalls: SessionTurnResult["toolCalls"];
+  pendingToolHits: ScoredMemory[];
+  unlockedThisTurn: Set<string>;
+  message: string;
+  now: Date;
+  floorNudged: boolean;
+  calls: number;
 }
 
 export class ChatSession {
@@ -69,6 +86,7 @@ export class ChatSession {
   private readonly highWater: number;
   private readonly keep: number;
   private readonly extract: boolean;
+  private readonly strongLlm?: LlmClient;
 
   private constructor(
     private readonly store: MemoryStore,
@@ -80,6 +98,7 @@ export class ChatSession {
     this.highWater = opts?.transcriptHighWater ?? TRANSCRIPT_HIGH_WATER;
     this.keep = opts?.transcriptKeep ?? TRANSCRIPT_KEEP;
     this.extract = opts?.extract ?? true;
+    this.strongLlm = opts?.strongLlm;
   }
 
   /** 進場即跑場景進入程序（pin + 交接浮現），所以用 async factory。 */
@@ -232,11 +251,55 @@ export class ChatSession {
     const working = [...head, ...this.transcript, `User: ${message}`];
     const toolCalls: SessionTurnResult["toolCalls"] = [];
     const pendingToolHits: ScoredMemory[] = [];
-    let floorNudged = false; // 行為地板每輪只 nudge 一次（使用者可能是拒絕，不無限逼）
+    const ctx: LoopCtx = {
+      system,
+      working,
+      tools,
+      toolCalls,
+      pendingToolHits,
+      unlockedThisTurn,
+      message,
+      now,
+      floorNudged: false, // 行為地板整輪只 nudge 一次（使用者可能是拒絕，不無限逼）
+      calls: 0,
+    };
 
+    // 動態路由 v1（#25）：本地模型收斂失敗 → 強模型「接手同一輪」——
+    // 看得到已有的 TOOL_RESULT（不重複副作用），working 附升級註記。
+    let replyText = await this.driveLoop(this.llm, ctx);
+    let escalated = false;
+    if (replyText === null && this.strongLlm) {
+      escalated = true;
+      working.push(
+        "SYSTEM_GUARD: escalated — the previous model could not complete this turn. Review the conversation and TOOL_RESULT lines above (those actions are already done; do not repeat them) and finish the turn correctly.",
+      );
+      replyText = await this.driveLoop(this.strongLlm, ctx);
+    }
+
+    const finalReply =
+      replyText ?? "(Interrupted: too many consecutive actions — please tell me again what you need.)";
+    this.transcript.push(`User: ${message}`, `(You): ${finalReply}`);
+    await this.compactTranscript();
+    await this.finishTurn(pendingToolHits, admitted, now);
+    if (this.extract && replyText !== null) await this.extractMemories(message, now);
+    await this.persist(now);
+    return {
+      reply: finalReply,
+      toolCalls,
+      admitted,
+      windowSize: this.window.size,
+      turns: ctx.calls,
+      escalated,
+    };
+  }
+
+  /** 工具迴圈本體：收斂到 reply 回文字、預算用完回 null（觸發升級或中斷回覆）。 */
+  private async driveLoop(llm: LlmClient, ctx: LoopCtx): Promise<string | null> {
+    const { system, working, tools, toolCalls, pendingToolHits, message, now } = ctx;
     for (let i = 1; i <= MAX_TURNS; i++) {
+      ctx.calls++;
       // 時間戳放尾端、分鐘粒度：每輪資料不污染 prefix
-      const raw = await this.llm.complete(
+      const raw = await llm.complete(
         system,
         [...working, `(Current time: ${now.toISOString().slice(0, 16)})`].join("\n"),
       );
@@ -250,26 +313,15 @@ export class ChatSession {
       }
       if (action.action === "reply") {
         // 行為地板（CAR-bench 經驗：prompt 是上限、harness 是下限）— 攔 reply 不是攔對話
-        if (!floorNudged) {
-          const nudge = safetyFloorNudge(message, toolCalls, unlockedThisTurn);
+        if (!ctx.floorNudged) {
+          const nudge = safetyFloorNudge(message, toolCalls, ctx.unlockedThisTurn);
           if (nudge) {
-            floorNudged = true;
+            ctx.floorNudged = true;
             working.push(`(You): ${JSON.stringify(action)}`, `SYSTEM_GUARD: ${nudge}`);
             continue;
           }
         }
-        this.transcript.push(`User: ${message}`, `(You): ${action.text}`);
-        await this.compactTranscript();
-        await this.finishTurn(pendingToolHits, admitted, now);
-        if (this.extract) await this.extractMemories(message, now);
-        await this.persist(now);
-        return {
-          reply: action.text,
-          toolCalls,
-          admitted,
-          windowSize: this.window.size,
-          turns: i,
-        };
+        return action.text;
       }
 
       // save_memory：使用者明說要記的事 → 確定性寫入（與萃取器的隱式路徑互補）
@@ -378,18 +430,7 @@ export class ChatSession {
       toolCalls.push({ tool: tool.name, args: action.args, result });
       working.push(`(You): ${JSON.stringify(action)}`, `TOOL_RESULT: ${JSON.stringify(result)}`);
     }
-
-    this.transcript.push(`User: ${message}`);
-    await this.compactTranscript();
-    await this.finishTurn(pendingToolHits, admitted, now);
-    await this.persist(now);
-    return {
-      reply: "(Interrupted: too many consecutive actions — please tell me again what you need.)",
-      toolCalls,
-      admitted,
-      windowSize: this.window.size,
-      turns: MAX_TURNS,
-    };
+    return null;
   }
 
   /** 高水位壓縮 + 折疊 digest（§4.9）：被丟的對話行不是消失，是濃縮成對話態。 */

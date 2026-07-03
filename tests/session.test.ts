@@ -171,6 +171,45 @@ describe("ChatSession 持久化與跨終端接續", () => {
     expect(payloads.some((p) => p.includes("SYSTEM_GUARD:"))).toBe(true);
   });
 
+  it("動態路由：本地模型收斂失敗 → 強模型接手同一輪，看得到既有 TOOL_RESULT", async () => {
+    const localSeen: string[] = [];
+    const local: LlmClient = {
+      async complete(_s, user) {
+        localSeen.push(user);
+        // 執行一個工具後開始鬼打牆（永遠不 reply）
+        if (localSeen.length === 1)
+          return '{"action":"tool_call","tool":"set_light","args":{"room":"all","on":false}}';
+        return "我不會輸出 JSON";
+      },
+    };
+    const strongSeen: string[] = [];
+    const strong: LlmClient = {
+      async complete(_s, user) {
+        strongSeen.push(user);
+        return '{"action":"reply","text":"燈已關好，其他都沒問題"}';
+      },
+    };
+    const s = await ChatSession.open(store, local, DEMO_USER, "home", NOW, {
+      extract: false,
+      strongLlm: strong,
+    });
+    const t = await s.send("關燈", NOW);
+    expect(t.escalated).toBe(true);
+    expect(t.reply).toBe("燈已關好，其他都沒問題");
+    // 本地已執行的工具不重跑：強模型收到的 working 含既有 TOOL_RESULT 與升級註記
+    expect(t.toolCalls.filter((c) => c.tool === "set_light")).toHaveLength(1);
+    expect(strongSeen[0]).toContain("TOOL_RESULT");
+    expect(strongSeen[0]).toContain("escalated");
+  });
+
+  it("動態路由：沒配置強模型時維持中斷回覆", async () => {
+    const local: LlmClient = { async complete() { return "垃圾輸出"; } };
+    const s = await ChatSession.open(store, local, DEMO_USER, "home", NOW, { extract: false });
+    const t = await s.send("隨便", NOW);
+    expect(t.escalated).toBe(false);
+    expect(t.reply).toContain("Interrupted");
+  });
+
   it("save_memory：明令記錄走確定性寫入，跨場景帶 sourceContext", async () => {
     const queue = [
       '{"action":"tool_call","tool":"save_memory","args":{"content":"下週一與王經理簽約","type":"episodic","context":"office","importance":0.9}}',

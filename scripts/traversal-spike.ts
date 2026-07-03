@@ -102,7 +102,11 @@ try {
       "S4 事件跨 scope 撈到 office 報價記憶",
       s.window.has(byKey("quote-meeting")) || s.window.has(byKey("wang-prefs")),
     );
-    check("S4 回覆含簡報內容（報價/維護費/季付）", /45,?000|報價|維護|季付/.test(t1.reply), t1.reply.slice(0, 80));
+    check(
+      "S4 回覆含簡報內容（記憶素材：報價/維護費/季付/交期）",
+      /45,?000|報價|維護|季付|交期/.test(t1.reply),
+      t1.reply.slice(0, 80),
+    );
     check("S4 詢問是否接聽而非擅自接", /接/.test(t1.reply));
   }
 
