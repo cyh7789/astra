@@ -1,6 +1,6 @@
 import { pathToFileURL } from "node:url";
 import { createPool } from "./db.js";
-import { FakeEmbedder } from "./embedder.js";
+import { selectEmbedder } from "./embedder-select.js";
 import type { MemoryInput } from "./store.js";
 import { MemoryStore } from "./store.js";
 
@@ -127,11 +127,14 @@ export async function seed(
   return ids;
 }
 
-// CLI: npm run seed
+// CLI: npm run seed（EMBEDDER=voyage 用真向量）
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const pool = createPool();
-  const store = new MemoryStore(pool, new FakeEmbedder());
+  const embedder = selectEmbedder();
+  const store = new MemoryStore(pool, embedder);
   const ids = await seed(store);
-  console.log(`seeded ${ids.size} memories for demo user ${DEMO_USER}`);
+  console.log(
+    `seeded ${ids.size} memories for demo user ${DEMO_USER} (${embedder.constructor.name})`,
+  );
   await pool.end();
 }

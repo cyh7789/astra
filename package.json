@@ -12,6 +12,7 @@
     "migrate": "tsx src/migrate.ts",
     "seed": "tsx src/seed.ts",
     "cli": "tsx src/cli.ts",
+    "chat": "tsx src/chat-cli.ts",
     "mcp": "tsx src/mcp-server.ts"
   },
   "dependencies": {

@@ -1,6 +1,6 @@
 import { parseArgs } from "node:util";
 import { createPool } from "./db.js";
-import { FakeEmbedder } from "./embedder.js";
+import { selectEmbedder } from "./embedder-select.js";
 import { DEMO_USER } from "./seed.js";
 import { MemoryStore } from "./store.js";
 
@@ -20,7 +20,7 @@ if (command !== "recall" || !query) {
 }
 
 const pool = createPool();
-const store = new MemoryStore(pool, new FakeEmbedder());
+const store = new MemoryStore(pool, selectEmbedder());
 const results = await store.recallGuarded({
   userId: values.user!,
   query,
