@@ -46,10 +46,17 @@ export class GeminiClient implements LlmClient {
         throw new Error(`gemini failed: ${res.status} ${await res.text()}`);
       }
       const data = (await res.json()) as {
-        candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+        candidates?: Array<{
+          content?: { parts?: Array<{ text?: string; thought?: boolean }> };
+        }>;
       };
       const parts = data.candidates?.[0]?.content?.parts ?? [];
-      return parts.map((p) => p.text ?? "").join("").trim();
+      // Gemma/thinking 模型會回 thought parts（推理過程），只取答案
+      return parts
+        .filter((p) => !p.thought)
+        .map((p) => p.text ?? "")
+        .join("")
+        .trim();
     }
   }
 }
