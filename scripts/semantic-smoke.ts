@@ -17,8 +17,10 @@ const SCENARIOS: Array<[string, string]> = [
 const db = await createTestDb();
 try {
   const embedder =
-    process.env.EMBEDDER === "vertex" ? new VertexEmbedder() : new VoyageEmbedder();
-  console.error(`embedder: ${embedder.constructor.name}`);
+    process.env.EMBEDDER === "vertex"
+      ? new VertexEmbedder()
+      : new VoyageEmbedder(process.env.VOYAGE_MODEL ?? "voyage-4-large");
+  console.error(`embedder: ${embedder.constructor.name} ${process.env.VOYAGE_MODEL ?? ""}`);
   const store = new MemoryStore(db.pool, embedder);
   console.error("seeding with real embeddings...");
   await seed(store);
