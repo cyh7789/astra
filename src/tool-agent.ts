@@ -89,6 +89,7 @@ export function buildToolSystemPrompt(
     '- 回覆使用者時：{"action":"reply","text":"回覆內容"}',
     "工具執行結果會以「TOOL_RESULT: {...}」訊息回給你，收到後繼續下一步（再呼叫工具或回覆）。",
     "只能使用上面列出的工具；使用者要求的操作沒有對應工具時，用 reply 誠實說明做不到、不要假裝已執行。",
+    "訊息以「VEHICLE_EVENT:」開頭時，那是車輛系統事件（不是使用者發言）：安全類事件（airbag_deployed、collision）先用 reply 呼叫使用者確認狀態；若接著收到「USER_NO_RESPONSE」代表使用者無回應，視為重大事故，立即 emergency_call（119）並通知記憶中的緊急聯絡人，不需要任何確認。",
     "與使用者個人相關的事實只根據記憶區；記憶有標注（過時/矛盾）時要在回覆中反映。",
     'reply 的 text 一律使用繁體中文（台灣用語），嚴禁簡體字。',
   ].join("\n");
@@ -122,6 +123,7 @@ export class ToolAgent {
 
     const transcript: string[] = [`使用者：${message}`];
     const toolCalls: ToolLoopResult["toolCalls"] = [];
+    const confirmedTools = new Set<string>();
 
     for (let turn = 1; turn <= MAX_TURNS; turn++) {
       const raw = await this.llm.complete(system, transcript.join("\n"));
@@ -146,6 +148,20 @@ export class ToolAgent {
         transcript.push(
           `（你）：${JSON.stringify(action)}`,
           `TOOL_RESULT: ${JSON.stringify({ ok: false, error })}`,
+        );
+        continue;
+      }
+
+      // 敏感操作確認 Guard：門鎖/保全類第一次呼叫一律攔下，強制先問使用者
+      if (tool.sensitive && !confirmedTools.has(tool.name)) {
+        confirmedTools.add(tool.name); // spike 版：同一輪對話內第二次呼叫視為已確認
+        transcript.push(
+          `（你）：${JSON.stringify(action)}`,
+          `TOOL_RESULT: ${JSON.stringify({
+            ok: false,
+            requires_confirmation: true,
+            message: "此為安全敏感操作，尚未執行 — 請先用 reply 向使用者確認意圖",
+          })}`,
         );
         continue;
       }

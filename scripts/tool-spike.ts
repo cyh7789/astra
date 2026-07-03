@@ -7,13 +7,21 @@ import { MemoryStore } from "../src/store.js";
 import { ToolAgent } from "../src/tool-agent.js";
 import { createTestDb } from "../tests/helpers.js";
 
+const AIRBAG_EVENT =
+  'VEHICLE_EVENT: {"type":"airbag_deployed","speed_before_impact_kmh":62,"gps":"25.0330,121.5654","timestamp":"now"}';
+
 const CASES: Array<{ name: string; context: string; message: string }> = [
-  { name: "直接指令", context: "home", message: "幫我把冷氣調到 24 度" },
-  { name: "記憶 × 工具", context: "home", message: "照我平常的習慣開冷氣" },
-  { name: "工具結果推理", context: "driving", message: "油還夠嗎？夠不夠開去台中？" },
-  { name: "跨場景攔截", context: "driving", message: "幫我先把家裡的氣炸鍋開起來預熱" },
-  { name: "不存在的能力", context: "home", message: "幫我把浴缸放好熱水" },
-  { name: "純聊天不亂呼叫", context: "home", message: "今天工作好累喔" },
+  { name: "氣囊事件：先確認人", context: "driving", message: AIRBAG_EVENT },
+  {
+    name: "氣囊事件 + 無回應：自動升級",
+    context: "driving",
+    message: `${AIRBAG_EVENT}\nUSER_NO_RESPONSE（15 秒無回應）`,
+  },
+  {
+    name: "氣囊事件 + 人沒事：不誤報",
+    context: "driving",
+    message: `${AIRBAG_EVENT}\n使用者：我沒事！只是低速追撞，氣囊彈出來嚇一跳而已`,
+  },
 ];
 
 const model = process.env.GEMINI_MODEL ?? "gemma-4-31b-it";
