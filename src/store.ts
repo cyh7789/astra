@@ -45,6 +45,10 @@ export interface RecallQuery {
   topK?: number;
   now?: Date; // 測試用時間凍結
   weights?: FusionWeights;
+  /** scene（預設）= 場景+隱私過濾；cross = 跨場景（事件/顯式深查用，流動政策 §4.8 — 呼叫端負責來源標注） */
+  scope?: "scene" | "cross";
+  /** 准入門檻：原始 cosine 低於此值的候選剔除（校準：scripts/threshold-calibrate.ts） */
+  minSim?: number;
 }
 
 export interface Candidate extends Memory {
@@ -169,10 +173,10 @@ export class MemoryStore {
        WHERE user_id = $1
          AND deleted_at IS NULL
          AND (expires_at IS NULL OR expires_at > $4)
-         AND (context = $3 OR context = 'any' OR privacy_level IN ('cross-context', 'public'))
+         AND ($6 OR context = $3 OR context = 'any' OR privacy_level IN ('cross-context', 'public'))
        ORDER BY embedding <-> $2::vector
        LIMIT $5`,
-      [q.userId, encodeVector(queryEmbedding), q.context, now, CANDIDATE_LIMIT],
+      [q.userId, encodeVector(queryEmbedding), q.context, now, CANDIDATE_LIMIT, q.scope === "cross"],
     );
     return r.rows.map((row) => ({ ...rowToMemory(row), vectorSim: Number(row.vector_sim) }));
   }
@@ -183,7 +187,11 @@ export class MemoryStore {
     const weights = q.weights ?? DEFAULT_FUSION_WEIGHTS;
     const topK = q.topK ?? 5;
 
-    const candidates = await this.fetchCandidates(q);
+    let candidates = await this.fetchCandidates(q);
+    if (q.minSim !== undefined) {
+      const minSim = q.minSim;
+      candidates = candidates.filter((c) => c.vectorSim >= minSim);
+    }
     if (candidates.length === 0) return [];
 
     const queryTokens = tokenize(q.query);
@@ -229,6 +237,63 @@ export class MemoryStore {
       "INSERT INTO memory_links (source_id, target_id, relation) VALUES ($1, $2, $3)",
       [sourceId, targetId, relation],
     );
+  }
+
+  async getMany(ids: string[]): Promise<Memory[]> {
+    if (ids.length === 0) return [];
+    const r = await this.pool.query(
+      `SELECT ${MEMORY_COLS} FROM memories WHERE id = ANY($1::uuid[]) AND deleted_at IS NULL`,
+      [ids],
+    );
+    return r.rows.map(rowToMemory);
+  }
+
+  /** 單端匹配的邊查詢（記憶窗 link 一跳擴展用 — 對照 loadContradictsLinks 要求兩端都在集合內）。 */
+  async loadLinksFor(
+    ids: string[],
+  ): Promise<Array<{ sourceId: string; targetId: string; relation: string }>> {
+    if (ids.length === 0) return [];
+    const r = await this.pool.query(
+      `SELECT source_id, target_id, relation FROM memory_links
+       WHERE source_id = ANY($1::uuid[]) OR target_id = ANY($1::uuid[])`,
+      [ids],
+    );
+    return r.rows.map((row) => ({
+      sourceId: row.source_id as string,
+      targetId: row.target_id as string,
+      relation: row.relation as string,
+    }));
+  }
+
+  /** 交接浮現候選（§4.5）：在其他場景交代、屬於新場景的近況記憶。
+   *  純 SQL 零 embedding。PoC 版 surfaced 去重由 session 端記錄（surfaced_at 欄位 = migration 002）。 */
+  async handoffCandidates(userId: string, context: string, now = new Date()): Promise<Memory[]> {
+    const r = await this.pool.query(
+      `SELECT ${MEMORY_COLS} FROM memories
+       WHERE user_id = $1 AND context = $2 AND deleted_at IS NULL
+         AND source_context IS NOT NULL AND source_context != $2
+         AND (expires_at IS NULL OR expires_at > $3)
+         AND created_at > $3::timestamptz - INTERVAL '14 days'
+       ORDER BY importance DESC
+       LIMIT 3`,
+      [userId, context, now],
+    );
+    return r.rows.map(rowToMemory);
+  }
+
+  /** 場景 pin 候選（§4.5）：安全關鍵、跨場景可見的常駐記憶（如緊急聯絡人）。 */
+  async pinCandidates(userId: string, now = new Date()): Promise<Memory[]> {
+    const r = await this.pool.query(
+      `SELECT ${MEMORY_COLS} FROM memories
+       WHERE user_id = $1 AND deleted_at IS NULL
+         AND (expires_at IS NULL OR expires_at > $2)
+         AND importance >= 0.9
+         AND (context = 'any' OR privacy_level IN ('cross-context', 'public'))
+       ORDER BY importance DESC
+       LIMIT 2`,
+      [userId, now],
+    );
+    return r.rows.map(rowToMemory);
   }
 
   async loadContradictsLinks(ids: string[]): Promise<ContradictsLink[]> {
