@@ -1,7 +1,8 @@
-/** 真語意煙霧驗證：用 Vertex embeddings 重跑三場景 + 語意壓力題，
+/** 真語意煙霧驗證：用真 embeddings 重跑三場景 + 語意壓力題，
  *  對照 FakeEmbedder 的已知盲點（氣炸鍋↔晚餐）看檢索品質。
- *  跑法：npx tsx scripts/semantic-smoke.ts（需 gcloud ADC + 本地 dev DB） */
+ *  跑法：npx tsx scripts/semantic-smoke.ts（預設 Voyage，EMBEDDER=vertex 切 Vertex/ADC；需本地 dev DB） */
 import { VertexEmbedder } from "../src/embedder-vertex.js";
+import { VoyageEmbedder } from "../src/embedder-voyage.js";
 import { DEMO_USER, seed } from "../src/seed.js";
 import { MemoryStore } from "../src/store.js";
 import { createTestDb } from "../tests/helpers.js";
@@ -15,7 +16,10 @@ const SCENARIOS: Array<[string, string]> = [
 
 const db = await createTestDb();
 try {
-  const store = new MemoryStore(db.pool, new VertexEmbedder());
+  const embedder =
+    process.env.EMBEDDER === "vertex" ? new VertexEmbedder() : new VoyageEmbedder();
+  console.error(`embedder: ${embedder.constructor.name}`);
+  const store = new MemoryStore(db.pool, embedder);
   console.error("seeding with real embeddings...");
   await seed(store);
 
