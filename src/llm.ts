@@ -37,8 +37,8 @@ export class GeminiClient implements LlmClient {
           }),
         },
       );
-      // 429 = 限流、503 = 模型高需求，都是暫時性 — 等 20s 重試
-      if ((res.status === 429 || res.status === 503) && attempt < 2) {
+      // 429 = 限流、503 = 高需求、500 = 服務端暫時錯誤 — 等 20s 重試
+      if ([429, 500, 503].includes(res.status) && attempt < 2) {
         await new Promise((r) => setTimeout(r, 20_000));
         continue;
       }

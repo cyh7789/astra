@@ -93,6 +93,14 @@ export function demoMemories(now: Date): Array<MemoryInput & { key: string }> {
       sourceContext: "driving",
       createdAt: new Date(now.getTime() - 7 * d),
     },
+    {
+      key: "ac-pref",
+      userId: DEMO_USER,
+      context: "home",
+      memoryType: "semantic",
+      content: "冷氣習慣開 26 度、除濕模式",
+      createdAt: new Date(now.getTime() - 30 * d),
+    },
     // 衝突情境（ConflictGuard demo）：長期偏好 vs 昨天的行為互相矛盾
     {
       key: "no-spicy",
