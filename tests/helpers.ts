@@ -3,7 +3,16 @@ import type pg from "pg";
 import { createPool } from "../src/db.js";
 import { runMigrations } from "../src/migrate.js";
 
-const BASE = "postgresql://root@localhost:26257/defaultdb?sslmode=disable";
+/** 測試基底連線（defaultdb）。設 ASTRA_TEST_BASE_URL 可對 Cloud cluster 跑同一套測試。 */
+const BASE =
+  process.env.ASTRA_TEST_BASE_URL ??
+  "postgresql://root@localhost:26257/defaultdb?sslmode=disable";
+
+function urlWithDb(dbName: string): string {
+  const u = new URL(BASE);
+  u.pathname = `/${dbName}`;
+  return u.toString();
+}
 
 export interface TestDb {
   pool: pg.Pool;
@@ -16,9 +25,7 @@ export async function createTestDb(): Promise<TestDb> {
   const dbName = `astra_test_${randomBytes(4).toString("hex")}`;
   const admin = createPool(BASE);
   await admin.query(`CREATE DATABASE ${dbName}`);
-  const pool = createPool(
-    `postgresql://root@localhost:26257/${dbName}?sslmode=disable`,
-  );
+  const pool = createPool(urlWithDb(dbName));
   await runMigrations(pool);
   return {
     pool,

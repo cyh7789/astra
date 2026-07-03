@@ -49,6 +49,21 @@ npm run seed                 # 灌三場景 demo 記憶
 npm test                     # 28 tests（純函數單元 + DB 整合 + 三場景端到端）
 ```
 
+## CockroachDB Cloud
+
+同一套程式碼直接切 Cloud（Basic cluster on AWS）：
+
+```bash
+export ASTRA_DB_URL='postgresql://<user>:<pass>@<host>:26257/astra?sslmode=verify-full'
+npm run migrate && npm run seed
+npm run cli -- recall --context driving "今天行程怎麼安排？"
+# 測試套件也能整套對 Cloud 跑（測試庫建在 defaultdb 同 cluster）：
+export ASTRA_TEST_BASE_URL='postgresql://<user>:<pass>@<host>:26257/defaultdb?sslmode=verify-full'
+npm test
+```
+
+已驗證（2026-07-03，cluster v25.4 / AWS us-east-1）：33/33 tests 通過。Cloud schema 由 CockroachDB Cloud 官方 MCP Server 佈建（`create_database` / `create_table` 含 inline `VECTOR INDEX`），與本地 migration 001 一致。
+
 ## Demo CLI
 
 ```bash
