@@ -60,6 +60,8 @@ describe("astra mcp server", () => {
     expect(recalled.memories[0].id).toBe(remembered.id);
     expect(recalled.memories[0].signals).toBeDefined();
     expect(recalled.memories[0].embedding).toBeUndefined(); // 不洩漏向量
+    expect(Array.isArray(recalled.memories[0].annotations)).toBe(true); // guard 標注欄位
+    expect(Array.isArray(recalled.memories[0].conflictsWith)).toBe(true);
   });
 
   it("update_memory changes content", async () => {

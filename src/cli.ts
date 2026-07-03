@@ -21,7 +21,7 @@ if (command !== "recall" || !query) {
 
 const pool = createPool();
 const store = new MemoryStore(pool, new FakeEmbedder());
-const results = await store.recall({
+const results = await store.recallGuarded({
   userId: values.user!,
   query,
   context: values.context!,
@@ -35,5 +35,6 @@ for (const m of results) {
       `\n       vec=${sig.vector.toFixed(2)} bm25=${sig.bm25.toFixed(2)} rec=${sig.recency.toFixed(2)}` +
       (m.sourceContext ? `  (source: ${m.sourceContext})` : ""),
   );
+  for (const a of m.annotations) console.log(`       ⚠ ${a}`);
 }
 await pool.end();

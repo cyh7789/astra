@@ -81,6 +81,20 @@ npm run cli -- recall --context home "冰箱裡還有什麼？晚餐吃什麼好
 
 已知展示面小瑕疵：候選集小的時候 min-max 歸一化會把最弱候選壓到 0.00（仍會回傳、排序正確）。Phase 4 進 reranker 時一併處理。
 
+## Guard Chain（安全標注層）
+
+Recall 結果經過確定性 guard chain 後才交給 agent — **標注不攔截**（隱私攔截在 SQL 層），讓安全訊號對 agent 與使用者可見：
+
+| 情境 | Guard | 實際輸出 |
+|------|-------|---------|
+| 跨場景透明 | PrivacyGuard | `⚠ 來自 office 場景的記憶` / `⚠ 當時在 driving 場景提到` |
+| 過時警告 | RecencyGuard | `⚠ 21 天前的資訊，可能已過時`（episodic 限定，semantic 長期事實不標） |
+| 矛盾偵測 | ConflictGuard | `⚠ 與記憶「昨天晚餐點了麻辣鍋外送…」矛盾，建議確認而非假設` + `conflictsWith` ids |
+
+設計原則：**建邊是寫入時智能**（Phase 4 萃取器偵測矛盾寫 `memory_links`），**查邊是讀取時規則**（guard 零 LLM、完全確定性、可重複測試）。Agent 看到 `conflictsWith` 非空就「問而不是猜」。
+
+Hallucination / Capability guard 屬 agent 回應層，隨 Phase 4 agent 一起實作。
+
 ## MCP Server
 
 ASTRA 記憶層透過 MCP 協定暴露，任何 MCP 相容 client 都能接：
@@ -108,8 +122,8 @@ Phase 1 用確定性 FakeEmbedder（token 重疊 ≈ 相似度）讓測試不依
 |-------|------|
 | 1 ✅ | 記憶核心：schema + 多訊號融合檢索 + 三場景測試 |
 | 2 ✅ | MCP server（remember / recall / update_memory / forget 工具） |
-| 3 | Guard Chain（Privacy/Hallucination/Recency/Conflict）+ 記憶萃取器 + 場景偵測 |
-| 4 | Bedrock agent + LLM reranker + demo UI + 真 embeddings |
+| 3 ✅ | Guard Chain（Privacy/Recency/Conflict 確定性版 + 情境資料） |
+| 4 | Bedrock agent + LLM reranker + demo UI + 真 embeddings + 記憶萃取器 + Hallucination/Capability guard |
 | 5 | AWS 部署（Lambda pre-warming、ECS）+ CockroachDB Cloud |
 
 設計稿與實作計畫在 `docs/plans/`。

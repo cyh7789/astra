@@ -4,8 +4,8 @@ import { pathToFileURL } from "node:url";
 import { z } from "zod";
 import { createPool } from "./db.js";
 import { FakeEmbedder } from "./embedder.js";
+import type { GuardedMemory } from "./guards.js";
 import { DEMO_USER } from "./seed.js";
-import type { ScoredMemory } from "./store.js";
 import { MemoryStore } from "./store.js";
 
 /** 工具回傳統一走 JSON text content */
@@ -22,7 +22,7 @@ function errorResult(err: unknown) {
 }
 
 /** recall 結果瘦身：不回 embedding（1024 維進 context 是雜訊）、Date 轉 ISO 字串 */
-function publicMemory(m: ScoredMemory) {
+function publicMemory(m: GuardedMemory) {
   return {
     id: m.id,
     context: m.context,
@@ -35,6 +35,8 @@ function publicMemory(m: ScoredMemory) {
     sourceContext: m.sourceContext,
     score: m.score,
     signals: m.signals,
+    annotations: m.annotations,
+    conflictsWith: m.conflictsWith ?? [],
   };
 }
 
@@ -85,7 +87,9 @@ export function createAstraServer(store: MemoryStore, userId: string): McpServer
     {
       description:
         "多訊號融合檢索：從記憶庫撈出與 query 最相關的記憶" +
-        "（SQL 場景/隱私過濾 + 向量語意 + BM25 關鍵字 + 時近性）。",
+        "（SQL 場景/隱私過濾 + 向量語意 + BM25 關鍵字 + 時近性）。" +
+        "回傳含 Guard Chain 安全標注（annotations：跨場景來源/過時警告/矛盾偵測）；" +
+        "conflictsWith 非空時應向使用者確認而非自行假設。",
       inputSchema: {
         query: z.string().min(1),
         context: z.string().describe("當前場景，決定隱私過濾範圍"),
@@ -94,7 +98,7 @@ export function createAstraServer(store: MemoryStore, userId: string): McpServer
     },
     async (args) => {
       try {
-        const memories = await store.recall({
+        const memories = await store.recallGuarded({
           userId,
           query: args.query,
           context: args.context,
