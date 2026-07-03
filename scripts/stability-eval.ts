@@ -23,7 +23,8 @@ for (let run = 1; run <= RUNS; run++) {
     ({ stdout, stderr } = await exec("npx", ["tsx", "scripts/traversal-spike.ts"], {
       env: { ...process.env, SPIKE_JSON: "1" },
       maxBuffer: 16 * 1024 * 1024,
-      timeout: 50 * 60_000,
+      // 90 分：GEMINI_RETRIES=6 的指數退避單次呼叫最長 ~10 分，50 分上限曾把 run 殺在 S14（7/3 夜）
+      timeout: 90 * 60_000,
     }));
   } catch (e) {
     // spike 有 check 失敗時 exit 1，stdout 仍有 SPIKE_JSON 可聚合；崩潰/超時也把輸出留下來驗屍
