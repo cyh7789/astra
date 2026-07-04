@@ -1,0 +1,15 @@
+@import "tailwindcss";
+
+/* 單色琥珀 monospace 基調（Stage 模式視覺定案的前置）：
+   正式字元海在 UI-2 後半接入，骨架期先鋪同語系的色與字。 */
+:root {
+  --amber: #f5b642;
+  --amber-dim: #8a6420;
+  --sea: #0c0a06;
+}
+
+body {
+  background: var(--sea);
+  color: var(--amber);
+  font-family: "SF Mono", ui-monospace, Menlo, monospace;
+}
