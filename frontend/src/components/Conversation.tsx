@@ -15,6 +15,23 @@ function argsPreview(args: Record<string, unknown>): string {
     .join(" · ");
 }
 
+/** 小夏頭像：立繪頭部裁切 — 對話流裡「她」的存在感。 */
+function Avatar() {
+  return (
+    <div className="h-8 w-8 shrink-0 overflow-hidden rounded-full ring-1 ring-[var(--accent-dim)]">
+      <img src="/xiaoxia.png" alt="" className="h-16 w-8 object-cover object-top" />
+    </div>
+  );
+}
+
+function AstraBubble({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="font-chat inline-block max-w-[78%] whitespace-pre-wrap rounded-2xl rounded-tl-md bg-[color-mix(in_srgb,var(--accent)_14%,var(--panel))] px-4 py-2.5 text-left text-[14px] leading-relaxed shadow-[0_2px_20px_-8px_color-mix(in_srgb,var(--accent)_45%,transparent)]">
+      {children}
+    </div>
+  );
+}
+
 /** 對話流 + free-text 輸入列（評審保底：不開麥克風也能玩）。 */
 export function Conversation({
   messages,
@@ -30,7 +47,7 @@ export function Conversation({
 
   useEffect(() => {
     bottom.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages.length]);
+  }, [messages.length, busy]);
 
   function submit() {
     const text = draft.trim();
@@ -46,48 +63,60 @@ export function Conversation({
           m.role === "system" ? (
             <div
               key={i}
-              className="anim-rise flex items-center gap-1 text-[11px] tracking-wide text-[var(--accent-dim)]"
+              className="anim-rise flex items-center gap-1 pl-11 text-[11px] tracking-wide text-[var(--accent-dim)]"
             >
               <ChevronIcon /> {m.text}
             </div>
-          ) : (
-            <div key={i} className={`anim-rise ${m.role === "user" ? "text-right" : ""}`}>
-              {m.toolCalls?.map((t, j) => (
-                <div
-                  key={j}
-                  className="mb-1.5 mr-1 inline-flex items-center gap-1.5 rounded-sm border border-[var(--accent-faint)] bg-[var(--panel)] px-2.5 py-1 text-[11px] text-[var(--accent-dim)]"
-                >
-                  <span className="text-[var(--accent)]">
-                    <WrenchIcon />
-                  </span>
-                  <span className="text-[var(--ink)]">{t.tool}</span>
-                  <span className="opacity-80">{argsPreview(t.args)}</span>
-                </div>
-              ))}
-              <div
-                className={`inline-block max-w-[78%] whitespace-pre-wrap rounded-sm px-4 py-2.5 text-left text-[13.5px] leading-relaxed ${
-                  m.role === "user"
-                    ? "border border-[var(--accent-dim)] bg-[color-mix(in_srgb,var(--accent)_6%,transparent)]"
-                    : "border border-transparent bg-[color-mix(in_srgb,var(--accent)_13%,var(--panel))] shadow-[0_0_24px_-12px_var(--accent)]"
-                }`}
-              >
-                {m.escalated && (
-                  <span
-                    className="mr-1.5 inline-flex items-center gap-1 rounded-sm bg-[color-mix(in_srgb,var(--accent)_20%,transparent)] px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-[var(--accent)]"
-                    title="escalated to cloud model"
-                  >
-                    <ZapIcon /> cloud
-                  </span>
-                )}
+          ) : m.role === "user" ? (
+            <div key={i} className="anim-rise text-right">
+              <div className="font-chat inline-block max-w-[78%] whitespace-pre-wrap rounded-2xl rounded-br-md border border-[color-mix(in_srgb,var(--accent-dim)_60%,transparent)] bg-[color-mix(in_srgb,var(--accent)_5%,transparent)] px-4 py-2.5 text-left text-[14px] leading-relaxed">
                 {m.text}
+              </div>
+            </div>
+          ) : (
+            <div key={i} className="anim-rise flex items-start gap-3">
+              <Avatar />
+              <div className="min-w-0">
+                <div className="mb-1 flex items-center gap-2 text-[10px] uppercase tracking-[0.2em] text-[var(--accent-dim)]">
+                  astra
+                  {m.escalated && (
+                    <span
+                      className="inline-flex items-center gap-1 rounded-full bg-[color-mix(in_srgb,var(--accent)_20%,transparent)] px-1.5 py-px text-[9px] text-[var(--accent)]"
+                      title="escalated to cloud model"
+                    >
+                      <ZapIcon /> cloud
+                    </span>
+                  )}
+                </div>
+                {m.toolCalls && m.toolCalls.length > 0 && (
+                  <div className="mb-1.5 flex flex-wrap gap-1.5">
+                    {m.toolCalls.map((t, j) => (
+                      <span
+                        key={j}
+                        className="inline-flex items-center gap-1.5 rounded-full border border-[var(--accent-faint)] bg-[var(--panel)] px-2.5 py-1 text-[11px] text-[var(--accent-dim)]"
+                      >
+                        <span className="text-[var(--accent)]">
+                          <WrenchIcon />
+                        </span>
+                        <span className="text-[var(--ink)]">{t.tool}</span>
+                        <span className="opacity-80">{argsPreview(t.args)}</span>
+                      </span>
+                    ))}
+                  </div>
+                )}
+                <AstraBubble>{m.text}</AstraBubble>
               </div>
             </div>
           ),
         )}
         {busy && (
-          <div className="flex items-center gap-2 text-[11px] text-[var(--accent-dim)]">
-            <span className="inline-block h-1.5 w-1.5 animate-ping rounded-full bg-[var(--accent)]" />
-            thinking…
+          <div className="anim-rise flex items-start gap-3">
+            <Avatar />
+            <div className="inline-flex items-center gap-1.5 rounded-2xl rounded-tl-md bg-[color-mix(in_srgb,var(--accent)_14%,var(--panel))] px-4 py-3">
+              {[0, 1, 2].map((k) => (
+                <span key={k} className="typing-dot h-1.5 w-1.5 rounded-full bg-[var(--accent)]" />
+              ))}
+            </div>
           </div>
         )}
         <div ref={bottom} />
@@ -98,12 +127,12 @@ export function Conversation({
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && submit()}
           placeholder="Talk to ASTRA…"
-          className="grow rounded-sm border border-[var(--accent-faint)] bg-[var(--panel)] px-3.5 py-2.5 text-sm outline-none transition-colors placeholder:text-[var(--accent-faint)] focus:border-[var(--accent)]"
+          className="font-chat grow rounded-full border border-[var(--accent-faint)] bg-[var(--panel)] px-4 py-2.5 text-sm outline-none transition-colors placeholder:text-[var(--accent-faint)] focus:border-[var(--accent)]"
         />
         <button
           onClick={submit}
           disabled={busy}
-          className="flex items-center gap-1.5 rounded-sm border border-[var(--accent-dim)] px-4 text-sm text-[var(--accent)] transition-colors hover:border-[var(--accent)] hover:bg-[color-mix(in_srgb,var(--accent)_8%,transparent)] disabled:opacity-40"
+          className="flex items-center gap-1.5 rounded-full border border-[var(--accent-dim)] px-4 text-sm text-[var(--accent)] transition-colors hover:border-[var(--accent)] hover:bg-[color-mix(in_srgb,var(--accent)_8%,transparent)] disabled:opacity-40"
         >
           <SendIcon />
         </button>

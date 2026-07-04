@@ -116,7 +116,7 @@ export function Stage({
             <span className="mb-2 block text-[10px] tracking-[.35em] text-[#9b8a72]">
               ASTRA · {context.toUpperCase()}
             </span>
-            <span>{announcement.text}</span>
+            <span className="font-chat">{announcement.text}</span>
           </div>
         )}
 
