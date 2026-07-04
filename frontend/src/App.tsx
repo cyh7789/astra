@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, type DeviceState, type ToolCall, type WindowEntry } from "./api.js";
 import { Conversation, type Message } from "./components/Conversation.js";
-import { DeviceBoard } from "./components/DeviceBoard.js";
+import { DeviceBoard, deviceRows } from "./components/DeviceBoard.js";
 import { Inspector } from "./components/Inspector.js";
+import { Stage, type Announcement } from "./components/Stage.js";
 
 const SCENES = ["driving", "office", "home"] as const;
 
@@ -21,6 +22,8 @@ export default function App() {
   const [window_, setWindow] = useState<WindowEntry[]>([]);
   const [deviceState, setDeviceState] = useState<DeviceState | null>(null);
   const [busy, setBusy] = useState(false);
+  const [mode, setMode] = useState<"stage" | "inspector">("stage");
+  const [announcement, setAnnouncement] = useState<Announcement | null>(null);
   const hydrated = useRef(false);
 
   useEffect(() => {
@@ -46,6 +49,7 @@ export default function App() {
       setWindow(r.window);
       setDeviceState(r.deviceState);
       setContext(r.context);
+      setAnnouncement((a) => ({ id: (a?.id ?? 0) + 1, text: r.reply }));
     } catch (e) {
       setMessages((m) => [...m, { role: "system", text: `error: ${(e as Error).message}` }]);
     } finally {
@@ -89,6 +93,20 @@ export default function App() {
     }
   }, []);
 
+  if (mode === "stage") {
+    return (
+      <Stage
+        context={context}
+        busy={busy}
+        announcement={announcement}
+        deviceRows={deviceState ? deviceRows(deviceState, context) : []}
+        onSend={send}
+        onSwitchScene={switchScene}
+        onInspector={() => setMode("inspector")}
+      />
+    );
+  }
+
   return (
     <div className="flex h-screen flex-col">
       <header className="flex items-center gap-4 border-b border-[var(--amber-dim)] px-4 py-2">
@@ -109,6 +127,12 @@ export default function App() {
           ))}
         </nav>
         <div className="grow" />
+        <button
+          onClick={() => setMode("stage")}
+          className="border border-[var(--amber-dim)] px-3 py-1 text-sm hover:border-[var(--amber)]"
+        >
+          stage
+        </button>
         <button
           onClick={reset}
           className="border border-[var(--amber-dim)] px-3 py-1 text-sm hover:border-[var(--amber)]"

@@ -9,9 +9,14 @@ function Row({ label, value }: { label: string; value: string }) {
   );
 }
 
-/** 裝置板：reducer 折出來的狀態即時反映（demo UI 設計決策 2）。只列有狀態的裝置。 */
-export function DeviceBoard({ state, context }: { state: DeviceState; context: string }) {
-  const rows: Array<{ label: string; value: string }> = [];
+export interface DeviceRow {
+  label: string;
+  value: string;
+}
+
+/** reducer 折出來的狀態 → 顯示列（只列有狀態的裝置）。DeviceBoard 與 Stage 字條共用。 */
+export function deviceRows(state: DeviceState, context: string): DeviceRow[] {
+  const rows: DeviceRow[] = [];
 
   if (context === "driving") {
     const d = state.driving;
@@ -51,6 +56,12 @@ export function DeviceBoard({ state, context }: { state: DeviceState; context: s
       label: state.any.phone.emergency ? "⚠ emergency" : "phone",
       value: state.any.phone.calling,
     });
+  return rows;
+}
+
+/** 裝置板（Inspector 模式左欄）：demo UI 設計決策 2。 */
+export function DeviceBoard({ state, context }: { state: DeviceState; context: string }) {
+  const rows = deviceRows(state, context);
 
   return (
     <div>
