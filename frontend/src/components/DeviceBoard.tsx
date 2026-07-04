@@ -2,9 +2,9 @@ import type { DeviceState } from "../api.js";
 
 function Row({ label, value }: { label: string; value: string }) {
   return (
-    <div className="flex justify-between gap-2 text-xs">
-      <span className="text-[var(--amber-dim)]">{label}</span>
-      <span className="text-right">{value}</span>
+    <div className="anim-rise flex items-center justify-between gap-2 rounded-sm bg-[var(--panel)] px-2.5 py-1.5 text-xs">
+      <span className="text-[var(--accent-dim)]">{label}</span>
+      <span className="text-right text-[var(--accent)]">{value}</span>
     </div>
   );
 }
@@ -65,13 +65,13 @@ export function DeviceBoard({ state, context }: { state: DeviceState; context: s
 
   return (
     <div>
-      <h2 className="mb-2 text-xs uppercase tracking-widest text-[var(--amber-dim)]">devices</h2>
+      <h2 className="mb-3 text-[11px] uppercase tracking-[0.2em] text-[var(--accent-dim)]">devices</h2>
       {rows.length === 0 ? (
-        <p className="text-xs text-[var(--amber-dim)]">all quiet</p>
+        <p className="text-xs italic text-[var(--accent-faint)]">all quiet</p>
       ) : (
-        <div className="space-y-1">
-          {rows.map((r, i) => (
-            <Row key={i} label={r.label} value={r.value} />
+        <div className="space-y-1.5">
+          {rows.map((r) => (
+            <Row key={r.label} label={r.label} value={r.value} />
           ))}
         </div>
       )}

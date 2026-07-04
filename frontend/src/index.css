@@ -1,15 +1,77 @@
 @import "tailwindcss";
 
-/* 單色琥珀 monospace 基調（Stage 模式視覺定案的前置）：
-   正式字元海在 UI-2 後半接入，骨架期先鋪同語系的色與字。 */
+/* 單色琥珀 monospace 基調 + 場景色溫（driving 冷藍 / office 中性 / home 暖橘）。
+   accent 系列由 data-scene 切換 — 切場景 = 整片介面換色溫。 */
 :root {
-  --amber: #f5b642;
-  --amber-dim: #8a6420;
-  --sea: #0c0a06;
+  --sea: #0a0806;
+  --ink: #e8ddcf;
+  --accent: #f2c184;
+  --accent-dim: #8a6420;
+  --accent-faint: #58503f;
+  --panel: #12100c;
+}
+
+[data-scene="driving"] {
+  --accent: #9cc8e8;
+  --accent-dim: #4a6a85;
+  --accent-faint: #3a4a58;
+  --panel: #0c1014;
+  --sea: #06080a;
+}
+
+[data-scene="office"] {
+  --accent: #d8c9b4;
+  --accent-dim: #7a7264;
+  --accent-faint: #4d483f;
+  --panel: #100f0d;
+  --sea: #0a0908;
 }
 
 body {
   background: var(--sea);
-  color: var(--amber);
-  font-family: "SF Mono", ui-monospace, Menlo, monospace;
+  color: var(--ink);
+  font-family: "SF Mono", "JetBrains Mono", ui-monospace, Menlo, monospace;
+  transition: background 0.6s ease;
+}
+
+/* 細捲軸，融進面板 */
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--accent-faint);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes slide-in {
+  from {
+    opacity: 0;
+    transform: translateX(10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.anim-rise {
+  animation: rise 0.35s ease both;
+}
+
+.anim-slide {
+  animation: slide-in 0.4s ease both;
 }

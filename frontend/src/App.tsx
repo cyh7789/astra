@@ -3,6 +3,7 @@ import { api, type DeviceState, type ToolCall, type WindowEntry } from "./api.js
 import { Conversation, type Message } from "./components/Conversation.js";
 import { DeviceBoard, deviceRows } from "./components/DeviceBoard.js";
 import { Inspector } from "./components/Inspector.js";
+import { RotateIcon, WavesIcon } from "./components/icons.js";
 import { Stage, type Announcement } from "./components/Stage.js";
 
 const SCENES = ["driving", "office", "home"] as const;
@@ -95,57 +96,60 @@ export default function App() {
 
   if (mode === "stage") {
     return (
-      <Stage
-        context={context}
-        busy={busy}
-        announcement={announcement}
-        deviceRows={deviceState ? deviceRows(deviceState, context) : []}
-        onSend={send}
-        onSwitchScene={switchScene}
-        onInspector={() => setMode("inspector")}
-      />
+      <div data-scene={context}>
+        <Stage
+          context={context}
+          busy={busy}
+          announcement={announcement}
+          deviceRows={deviceState ? deviceRows(deviceState, context) : []}
+          onSend={send}
+          onSwitchScene={switchScene}
+          onInspector={() => setMode("inspector")}
+        />
+      </div>
     );
   }
 
   return (
-    <div className="flex h-screen flex-col">
-      <header className="flex items-center gap-4 border-b border-[var(--amber-dim)] px-4 py-2">
-        <h1 className="text-lg font-bold tracking-widest">ASTRA</h1>
-        <nav className="flex gap-1">
+    <div data-scene={context} className="flex h-screen flex-col bg-[var(--sea)] transition-colors duration-500">
+      <header className="flex items-center gap-6 border-b border-[var(--accent-faint)] px-6 py-3">
+        <h1 className="text-sm tracking-[0.35em] text-[var(--accent)]">A S T R A</h1>
+        <nav className="flex gap-4 text-[12px] uppercase tracking-[0.15em]">
           {SCENES.map((s) => (
             <button
               key={s}
               onClick={() => switchScene(s)}
-              className={`px-3 py-1 text-sm uppercase tracking-wider ${
+              className={`border-b pb-0.5 transition-colors ${
                 s === context
-                  ? "bg-[var(--amber)] text-[var(--sea)]"
-                  : "border border-[var(--amber-dim)] hover:border-[var(--amber)]"
+                  ? "border-[var(--accent)] text-[var(--accent)]"
+                  : "border-transparent text-[var(--accent-dim)] hover:text-[var(--ink)]"
               }`}
             >
-              {s}
+              {s === context ? "◉ " : ""}
+              {s === "driving" ? "car" : s}
             </button>
           ))}
         </nav>
         <div className="grow" />
         <button
           onClick={() => setMode("stage")}
-          className="border border-[var(--amber-dim)] px-3 py-1 text-sm hover:border-[var(--amber)]"
+          className="flex items-center gap-1.5 rounded-sm border border-[var(--accent-faint)] px-3 py-1 text-[11px] uppercase tracking-wider text-[var(--accent-dim)] transition-colors hover:border-[var(--accent)] hover:text-[var(--accent)]"
         >
-          stage
+          <WavesIcon /> stage
         </button>
         <button
           onClick={reset}
-          className="border border-[var(--amber-dim)] px-3 py-1 text-sm hover:border-[var(--amber)]"
+          className="flex items-center gap-1.5 rounded-sm border border-[var(--accent-faint)] px-3 py-1 text-[11px] uppercase tracking-wider text-[var(--accent-dim)] transition-colors hover:border-[var(--accent)] hover:text-[var(--accent)]"
         >
-          reset
+          <RotateIcon /> reset
         </button>
       </header>
-      <main className="grid min-h-0 grow grid-cols-[280px_1fr_320px]">
-        <aside className="overflow-y-auto border-r border-[var(--amber-dim)] p-3">
+      <main className="grid min-h-0 grow grid-cols-[280px_1fr_340px]">
+        <aside className="overflow-y-auto border-r border-[var(--accent-faint)] p-4">
           {deviceState && <DeviceBoard state={deviceState} context={context} />}
         </aside>
         <Conversation messages={messages} busy={busy} onSend={send} />
-        <aside className="overflow-y-auto border-l border-[var(--amber-dim)] p-3">
+        <aside className="overflow-y-auto border-l border-[var(--accent-faint)] p-4">
           <Inspector entries={window_} />
         </aside>
       </main>
