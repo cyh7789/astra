@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useSpeech } from "../hooks/useSpeech.js";
 import { createAsciiField, type AsciiField } from "../stage/ascii-field.js";
 import type { DeviceRow } from "./DeviceBoard.js";
+import { MicIcon } from "./icons.js";
 
 export interface Announcement {
   /** 單調遞增 — 只有「新到的回覆」才開口（載入還原的歷史不唸） */
@@ -32,6 +34,29 @@ export function Stage({
   const [subSide, setSubSide] = useState<"left" | "right">("left");
   const [draft, setDraft] = useState("");
   const spokenId = useRef(0);
+
+  // 語音偵測：push-to-talk final 填輸入列（可修正）；driving 免持 final 直接送出
+  const handsFree = context === "driving";
+  const speech = useSpeech(
+    useCallback(
+      (text: string) => {
+        if (!text) return;
+        if (handsFree && !busy) onSend(text);
+        else setDraft(text);
+      },
+      [handsFree, busy, onSend],
+    ),
+  );
+  useEffect(() => {
+    fieldRef.current?.setListening(speech.listening); // 聆聽預浮現
+  }, [speech.listening]);
+  useEffect(() => {
+    // driving = 免持預設開（「真的在跟車講話」）；離開場景收麥克風
+    if (handsFree && speech.supported) speech.start({ continuous: true });
+    else speech.stop();
+    // speech 物件每 render 更新，依 handsFree 切換即可
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [handsFree, speech.supported]);
 
   useEffect(() => {
     const field = createAsciiField(canvasRef.current!, (p) => setSubSide(p.subSide));
@@ -128,14 +153,33 @@ export function Stage({
           ))}
         </div>
 
+        {handsFree && speech.listening && (
+          <div className="absolute bottom-[76px] left-[6%] text-[10px] tracking-[.1em] text-[#58503f]">
+            <span className="text-[#f2c184]">●</span> hands-free listening
+          </div>
+        )}
+
         <div className="absolute bottom-6 left-[6%] flex w-[min(560px,52vw)] gap-2">
           <input
-            value={draft}
+            value={speech.interim || draft}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && submit()}
-            placeholder={busy ? "…" : "Talk to ASTRA…"}
+            placeholder={busy ? "…" : speech.listening ? "listening…" : "Talk to ASTRA…"}
             className="pointer-events-auto grow border border-[#58503f] bg-[#0a0806cc] px-3 py-2 text-sm text-[#f3e7d3] outline-none placeholder:text-[#58503f] focus:border-[#f2c184]"
           />
+          {speech.supported && (
+            <button
+              onClick={() => (speech.listening ? speech.stop() : speech.start())}
+              title={speech.listening ? "stop listening" : "push to talk"}
+              className={`pointer-events-auto grid h-[38px] w-[38px] place-items-center rounded-full border transition-colors ${
+                speech.listening
+                  ? "border-[#f2c184] bg-[#f2c18426] text-[#f2c184]"
+                  : "border-[#58503f] text-[#8a7d6b] hover:border-[#f2c184] hover:text-[#f2c184]"
+              }`}
+            >
+              <MicIcon />
+            </button>
+          )}
           <button
             onClick={submit}
             disabled={busy}

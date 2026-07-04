@@ -37,6 +37,8 @@ function grain(c: number, r: number): number {
 
 export interface AsciiField {
   setSpeaking(v: boolean): void;
+  /** 聆聽預浮現：麥克風開著時她半浮現（在聽的樣子），開口才完全成形 */
+  setListening(v: boolean): void;
   /** 真打點（TTS boundary / AnalyserNode 帶進來） */
   punch(strength?: number): void;
   /** 完全溶解後才換構圖（不會講到一半瞬移）。回傳目前構圖（字幕跳空側用）。 */
@@ -169,6 +171,7 @@ export function createAsciiField(
   const bands = [0, 0, 0, 0];
   const disp = [0, 0, 0, 0];
   let speaking = false;
+  let listening = false;
   let nextHit = 0;
   let presenceEnv = 0;
 
@@ -195,8 +198,9 @@ export function createAsciiField(
     for (let k = 0; k < 4; k++) disp[k]! += (bands[k]! - disp[k]!) * 0.5;
     const speak = disp[1]!;
     const lowBand = disp[0]!;
-    // 存在包絡：平常她不在 — 說話 ~2s 凝聚、說完 ~3s 溶回海裡
-    presenceEnv += ((speaking ? 1 : 0) - presenceEnv) * (speaking ? 0.013 : 0.0075);
+    // 存在包絡：平常她不在 — 說話 ~2s 凝聚、說完 ~3s 溶回海裡；聆聽時半浮現（預浮現）
+    const presenceTarget = speaking ? 1 : listening ? 0.35 : 0;
+    presenceEnv += (presenceTarget - presenceEnv) * (presenceTarget > presenceEnv ? 0.013 : 0.0075);
 
     ctx.fillStyle = "#0a0806";
     ctx.fillRect(0, 0, W, H);
@@ -259,6 +263,9 @@ export function createAsciiField(
   return {
     setSpeaking(v) {
       speaking = v;
+    },
+    setListening(v) {
+      listening = v;
     },
     punch(strength = 1) {
       punchBands(strength);

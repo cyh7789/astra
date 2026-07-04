@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ToolCall } from "../api.js";
-import { ChevronIcon, SendIcon, WrenchIcon, ZapIcon } from "./icons.js";
+import { useSpeech } from "../hooks/useSpeech.js";
+import { ChevronIcon, MicIcon, SendIcon, WrenchIcon, ZapIcon } from "./icons.js";
 
 export interface Message {
   role: "user" | "astra" | "system";
@@ -44,6 +45,8 @@ export function Conversation({
 }) {
   const [draft, setDraft] = useState("");
   const bottom = useRef<HTMLDivElement>(null);
+  // push-to-talk：final 填輸入列，使用者看得到轉錄、可修正再送
+  const speech = useSpeech(useCallback((text: string) => setDraft(text), []));
 
   useEffect(() => {
     bottom.current?.scrollIntoView({ behavior: "smooth" });
@@ -123,12 +126,25 @@ export function Conversation({
       </div>
       <div className="flex gap-2 border-t border-[var(--accent-faint)] p-4">
         <input
-          value={draft}
+          value={speech.interim || draft}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && submit()}
-          placeholder="Talk to ASTRA…"
+          placeholder={speech.listening ? "listening…" : "Talk to ASTRA…"}
           className="font-chat grow rounded-full border border-[var(--accent-faint)] bg-[var(--panel)] px-4 py-2.5 text-sm outline-none transition-colors placeholder:text-[var(--accent-faint)] focus:border-[var(--accent)]"
         />
+        {speech.supported && (
+          <button
+            onClick={() => (speech.listening ? speech.stop() : speech.start())}
+            title={speech.listening ? "stop listening" : "push to talk"}
+            className={`flex items-center rounded-full border px-3.5 transition-colors ${
+              speech.listening
+                ? "border-[var(--accent)] bg-[color-mix(in_srgb,var(--accent)_15%,transparent)] text-[var(--accent)]"
+                : "border-[var(--accent-faint)] text-[var(--accent-dim)] hover:border-[var(--accent)] hover:text-[var(--accent)]"
+            }`}
+          >
+            <MicIcon />
+          </button>
+        )}
         <button
           onClick={submit}
           disabled={busy}
