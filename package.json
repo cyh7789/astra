@@ -14,6 +14,7 @@
     "cli": "tsx src/cli.ts",
     "chat": "tsx src/chat-cli.ts",
     "server": "tsx server/index.ts",
+    "demo": "GEMINI_MODEL=gemma-4-31b-it EMBEDDER=voyage GEMINI_STT_MODEL=gemini-3.5-flash ASTRA_DB_URL=\"$ASTRA_CLOUD_URL\" tsx server/index.ts",
     "mcp": "tsx src/mcp-server.ts"
   },
   "dependencies": {
