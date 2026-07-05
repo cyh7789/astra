@@ -52,6 +52,14 @@ function intIn(v: unknown, min: number, max: number): boolean {
   return typeof v === "number" && Number.isInteger(v) && v >= min && v <= max;
 }
 
+/** mock 世界觀一致性：search_poi 樣板說建國路繞 3 分鐘，之後導航就得回 3 分鐘 —
+ *  各 mock 各自為政會穿幫（7/5 阿毛實測：前一輪 3 分鐘、導航後變 24 分鐘）。 */
+function mockEta(destination: string): number {
+  if (destination.includes("建國路")) return 3;
+  if (destination.includes("民族路")) return 7;
+  return 24;
+}
+
 // ── driving ──────────────────────────────────────────────
 
 const driving: DeviceTool[] = [
@@ -80,7 +88,12 @@ const driving: DeviceTool[] = [
             maps_url: r.maps_url, // 前端渲染「Open in Google Maps」卡片 — 點下去是真導航
           };
         },
-        { ok: true, device: "nav", destination: a.destination, eta_minutes: 24 },
+        {
+          ok: true,
+          device: "nav",
+          destination: a.destination,
+          eta_minutes: mockEta(a.destination as string),
+        },
       ),
   },
   {
@@ -121,8 +134,20 @@ const driving: DeviceTool[] = [
           ok: true,
           destination: a.destination,
           routes: [
-            { id: "r1", label: "fastest", eta_minutes: 24, distance_km: 18, toll: true },
-            { id: "r2", label: "toll-free", eta_minutes: 31, distance_km: 16, toll: false },
+            {
+              id: "r1",
+              label: "fastest",
+              eta_minutes: mockEta(a.destination as string),
+              distance_km: 18,
+              toll: true,
+            },
+            {
+              id: "r2",
+              label: "toll-free",
+              eta_minutes: mockEta(a.destination as string) + 7,
+              distance_km: 16,
+              toll: false,
+            },
           ],
         },
       ),
