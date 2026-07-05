@@ -67,10 +67,18 @@ export function buildApp(deps: AppDeps): FastifyInstance {
 
   // Live API 即時 STT relay：前端送 16kHz PCM（binary）→ Google Live → 逐字轉錄推回。
   // 金鑰留在 server；額度與 generateContent 分開（7/5 spike 實證）。段落式 /api/stt 是 fallback。
-  void app.register(fastifyWebsocket);
+  // maxPayload：16kHz Int16 一秒 32KB，256KB 綽綽有餘 — 超大 frame 直接斷，別替人搬磚打爆額度
+  void app.register(fastifyWebsocket, { options: { maxPayload: 256 * 1024 } });
+  let sttConnections = 0;
   void app.register(async (scope) => {
     scope.get("/ws/stt", { websocket: true }, (socket) => {
-      if (process.env.STT_DEBUG) console.log("[ws/stt] client connected");
+      // demo 是單使用者 — 同時 >2 條（主分頁 + 換頁殘留）就是濫用，拒收保護 Gemini 額度
+      if (sttConnections >= 2) {
+        socket.close(1013, "too many stt sessions");
+        return;
+      }
+      sttConnections++;
+      if (process.env.STT_DEBUG) console.log("[ws/stt] client connected", sttConnections);
       let live: ReturnType<typeof openLiveStt>;
       try {
         live = openLiveStt({
@@ -79,6 +87,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
           onClose: (reason) => socket.close(1011, reason),
         });
       } catch {
+        sttConnections--;
         socket.close(1011, "stt not configured");
         return;
       }
@@ -86,7 +95,10 @@ export function buildApp(deps: AppDeps): FastifyInstance {
         if (isBinary) live.sendPcm(data);
         else if (data.toString() === '{"end":true}') live.endAudio();
       });
-      socket.on("close", () => live.close());
+      socket.on("close", () => {
+        sttConnections--;
+        live.close();
+      });
     });
   });
 
@@ -127,9 +139,21 @@ export function buildApp(deps: AppDeps): FastifyInstance {
         "Content-Type": "text/event-stream",
         "Cache-Control": "no-cache",
         Connection: "keep-alive",
+        "X-Accel-Buffering": "no", // 反向代理（nginx/ALB）別 buffer — 不然「即時上屏」變一次性倒出
       });
-      const push = (event: string, data: unknown) =>
-        reply.raw.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+      // client 斷線（關分頁）後別再往壞掉的 stream 寫 — EPIPE 會炸掉整回合
+      let clientGone = false;
+      req.raw.on("close", () => {
+        clientGone = true;
+      });
+      const push = (event: string, data: unknown) => {
+        if (clientGone || reply.raw.writableEnded) return;
+        try {
+          reply.raw.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+        } catch {
+          clientGone = true;
+        }
+      };
       try {
         const result = await enqueue(async () => {
           const s = await ensureSession();

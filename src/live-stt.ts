@@ -54,13 +54,21 @@ export function openLiveStt(handlers: LiveSttHandlers, apiKey = process.env.GEMI
   ws.onmessage = async (ev) => {
     const raw =
       typeof ev.data === "string" ? ev.data : Buffer.from(await (ev.data as Blob).arrayBuffer()).toString();
-    const msg = JSON.parse(raw) as {
+    let msg: {
       setupComplete?: unknown;
       serverContent?: {
         inputTranscription?: { text?: string };
         turnComplete?: boolean;
       };
     };
+    try {
+      msg = JSON.parse(raw) as typeof msg;
+    } catch {
+      // Google 斷線/錯誤時可能推非 JSON 殘包 — 不能讓一包壞資料卡死整個 session
+      closeOnce("parse error");
+      ws.close();
+      return;
+    }
     if (msg.setupComplete !== undefined) {
       if (process.env.STT_DEBUG) console.log("[live-stt] setup complete, flushing", pending.length);
       ready = true;
@@ -79,10 +87,17 @@ export function openLiveStt(handlers: LiveSttHandlers, apiKey = process.env.GEMI
     }
   };
 
-  ws.onerror = () => handlers.onClose("error");
+  // onerror 之後通常緊跟 onclose — onClose handler 只許觸發一次（下游 socket.close 重入會 throw）
+  let closedNotified = false;
+  const closeOnce = (reason: string) => {
+    if (closedNotified) return;
+    closedNotified = true;
+    handlers.onClose(reason);
+  };
+  ws.onerror = () => closeOnce("error");
   ws.onclose = (ev) => {
     if (process.env.STT_DEBUG) console.log("[live-stt] upstream closed", ev.code, ev.reason);
-    handlers.onClose(`closed ${ev.code}`);
+    closeOnce(`closed ${ev.code}`);
   };
 
   const send = (payload: string) => {

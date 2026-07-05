@@ -64,7 +64,10 @@ export async function searchPoi(
   lng: number,
 ): Promise<Record<string, unknown>> {
   const tag = POI_TAGS.find((t) => t.re.test(query));
-  const filter = tag ? tag.filter : `["name"~"${query.replace(/["\\]/g, "")}"]`;
+  // 白名單字元集 — query 來自模型轉述的使用者語句，QL 特殊字元（];>( 等）可構造注入
+  const safe = query.replace(/[^一-鿿\w\s.-]/g, "").trim();
+  if (!tag && !safe) throw new Error("query unusable after sanitize");
+  const filter = tag ? tag.filter : `["name"~"${safe}"]`;
   const ql = `[out:json][timeout:5];(node${filter}(around:2000,${lat},${lng});way${filter}(around:2000,${lat},${lng}););out center 8;`;
   const data = (await getJson("https://overpass-api.de/api/interpreter", {
     method: "POST",

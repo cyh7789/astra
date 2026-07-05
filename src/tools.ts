@@ -163,9 +163,10 @@ const driving: DeviceTool[] = [
     execute: (a, env) =>
       liveOr("poi", env, (loc) => searchPoi(a.query as string, loc.lat, loc.lng), {
         ok: true,
+        // 欄位跟 live 版對齊（distance_km）— mock/live 形狀不同會讓模型與前端顯示飄
         results: [
-          { name: `${a.query}（建國路）`, detour_minutes: 3 },
-          { name: `${a.query}（民族路）`, detour_minutes: 7 },
+          { name: `${a.query}（建國路）`, distance_km: 0.8, detour_minutes: 3 },
+          { name: `${a.query}（民族路）`, distance_km: 1.9, detour_minutes: 7 },
         ],
       }),
   },

@@ -77,12 +77,18 @@ export function Stage({
     fieldRef.current?.setListening(listening); // 聆聽預浮現
   }, [listening]);
   useEffect(() => {
-    // driving = 免持預設開（「真的在跟車講話」）；離開場景收麥克風
-    if (handsFree && useLive) liveStt.start();
-    else if (handsFree && speech.supported) speech.start({ handsFree: true });
-    else {
+    // driving = 免持預設開（「真的在跟車講話」）；離開場景收麥克風。
+    // 兩路互斥：切模式時先收另一路，不然 live/段落式同時開麥雙重轉錄
+    if (handsFree && useLive) {
+      speech.stop();
+      liveStt.start(); // start 內會 reset failed — 每次進 driving 都重試 live
+    } else if (handsFree && speech.supported) {
+      liveStt.stop();
+      speech.start({ handsFree: true });
+    } else {
       liveStt.stop();
       speech.stop();
+      liveStt.resetFailed(); // 下次進 driving 重試 live
     }
     // hook 物件每 render 更新，依模式切換即可
     // eslint-disable-next-line react-hooks/exhaustive-deps

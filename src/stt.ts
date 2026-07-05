@@ -20,6 +20,7 @@ export function createGeminiTranscriber(
         `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
         {
           method: "POST",
+          signal: AbortSignal.timeout(15_000), // 卡住會讓前端永遠停在 transcribing…
           headers: { "x-goog-api-key": apiKey, "Content-Type": "application/json" },
           body: JSON.stringify({
             contents: [

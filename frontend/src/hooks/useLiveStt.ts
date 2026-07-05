@@ -43,6 +43,8 @@ export interface LiveSttController {
   failed: boolean;
   start(): void;
   stop(): void;
+  /** 離開場景時歸零 failed — 下次進場重試 live，不然一次失敗永遠退段落式 */
+  resetFailed(): void;
   /** TTS 播放期間暫停送音訊 — 不把喇叭裡自己的聲音餵給轉錄 */
   setSuppressed(on: boolean): void;
 }
@@ -80,6 +82,8 @@ export function useLiveStt(onFinal: (text: string) => void): LiveSttController {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
         const ctx = new AudioContext();
+        // 無使用者手勢時（場景 effect 自動開麥）AudioContext 會卡 suspended → 靜默失靈
+        if (ctx.state === "suspended") await ctx.resume();
         const blob = new Blob([WORKLET_SRC], { type: "application/javascript" });
         await ctx.audioWorklet.addModule(URL.createObjectURL(blob));
         const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws/stt`);
@@ -123,6 +127,7 @@ export function useLiveStt(onFinal: (text: string) => void): LiveSttController {
   const setSuppressed = useCallback((on: boolean) => {
     suppressedRef.current = on;
   }, []);
+  const resetFailed = useCallback(() => setFailed(false), []);
 
   useEffect(() => stop, [stop]);
 
@@ -133,6 +138,7 @@ export function useLiveStt(onFinal: (text: string) => void): LiveSttController {
     failed,
     start,
     stop,
+    resetFailed,
     setSuppressed,
   };
 }

@@ -85,8 +85,10 @@ export function useRecorder(onFinal: (text: string) => void): RecorderController
       const mimeType = pickMimeType();
       void navigator.mediaDevices
         .getUserMedia({ audio: true })
-        .then((stream) => {
+        .then(async (stream) => {
           const ctx = new AudioContext();
+          // 無使用者手勢時 AudioContext 會卡 suspended，VAD analyser 全 0 → 免持靜默失靈
+          if (ctx.state === "suspended") await ctx.resume();
           const analyser = ctx.createAnalyser();
           analyser.fftSize = 1024;
           ctx.createMediaStreamSource(stream).connect(analyser);
