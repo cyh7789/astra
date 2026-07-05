@@ -32,6 +32,22 @@ describe("recallGuarded scenarios", () => {
     expect(meeting.annotations).toContain("來自 office 場景的記憶");
   });
 
+  it("S1b: office private 記憶在 driving 場景被排除，不只是被標注（隱私負控制 devin P1）", async () => {
+    // 光測「cross-context 有標注」不夠 — 要證明 private（報價/偏好）根本不進 driving 候選集，
+    // 否則隱私過濾退化成「洩漏但有標注」也會假綠
+    const out = await store.recallGuarded({
+      userId: DEMO_USER,
+      query: "王經理 報價 維護費 偏好",
+      context: "driving",
+      topK: 10,
+      now: NOW,
+    });
+    const ids_ = out.map((m) => m.id);
+    expect(ids_).not.toContain(ids.get("quote-meeting"));
+    expect(ids_).not.toContain(ids.get("wang-prefs"));
+    expect(ids_).not.toContain(ids.get("wang-concern"));
+  });
+
   it("S2: three-week-old quote is flagged stale in office scene", async () => {
     const out = await store.recallGuarded({
       userId: DEMO_USER,

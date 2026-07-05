@@ -50,6 +50,16 @@ describe("PrivacyGuard", () => {
     const out = await applyGuards([PrivacyGuard], ms, { currentContext: "home", now: NOW }, noDeps);
     expect(out[0]!.annotations).toContain("當時在 driving 場景提到");
   });
+
+  it("反向 + 同場景負控制：home→office 標注、sourceContext===context 不標（devin P2）", async () => {
+    const ms = toGuarded([
+      mem({ context: "home", privacyLevel: "cross-context" }), // 反向：在 office 看 home 記憶
+      mem({ context: "office", sourceContext: "office" }), // 同源同場景：不該標
+    ]);
+    const out = await applyGuards([PrivacyGuard], ms, { currentContext: "office", now: NOW }, noDeps);
+    expect(out[0]!.annotations).toContain("來自 home 場景的記憶");
+    expect(out[1]!.annotations).toHaveLength(0);
+  });
 });
 
 describe("RecencyGuard", () => {

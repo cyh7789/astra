@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildApp } from "../server/app.js";
 import { FakeEmbedder } from "../src/embedder.js";
 import type { LlmClient } from "../src/llm.js";
-import { seed } from "../src/seed.js";
+import { demoMemories, seed } from "../src/seed.js";
 import { MemoryStore } from "../src/store.js";
 import { createTestDb, type TestDb } from "./helpers.js";
 
@@ -155,7 +155,8 @@ describe("demo server API", () => {
     const { rows } = await db.pool.query(
       "SELECT count(*)::int AS n FROM memories WHERE deleted_at IS NULL",
     );
-    expect(rows[0].n).toBeGreaterThan(0); // 重 seed 後記憶在
+    // 精確 seed 數，不只驗 >0 — 少 seed 一半也該紅（devin P2）
+    expect(rows[0].n).toBe(demoMemories(new Date()).length);
     await app.close();
   });
 });

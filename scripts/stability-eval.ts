@@ -82,4 +82,10 @@ if (order.length === 0) {
 const total = [...appearances.values()].reduce((a, b) => a + b, 0);
 const passed = [...passes.values()].reduce((a, b) => a + b, 0);
 console.log(`總通過率：${passed}/${total}（${((passed / total) * 100).toFixed(1)}%，分母 = 各檢查實際出現輪數）`);
-process.exit(stableFail.length > 0 || crashedRuns === RUNS ? 1 : 0);
+// 抖動也算失敗（devin P0：--lenient 才放行）— 否則 1/3 通過率被當可交付，「抖動」永遠不被逼修
+const lenient = process.argv.includes("--lenient");
+const failed = stableFail.length > 0 || crashedRuns === RUNS || (!lenient && flaky.length > 0);
+if (!lenient && flaky.length > 0) {
+  console.error(`\n抖動視為失敗（加 --lenient 放行）：${flaky.join("；")}`);
+}
+process.exit(failed ? 1 : 0);

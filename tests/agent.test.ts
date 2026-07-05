@@ -71,6 +71,19 @@ describe("parseExtraction", () => {
     expect(parseExtraction('[{"memoryType":"procedural","content":"x"}]', USER, NOW)).toEqual([]);
     expect(parseExtraction("[]", USER, NOW)).toEqual([]);
   });
+
+  it("非法 context 落 any、缺 content 整筆丟棄（devin P2 越界值）", () => {
+    // context:"moon" 不在白名單 → 落 "any"（不當機、不採信亂值當場景）
+    const moon = parseExtraction(
+      '[{"memoryType":"semantic","content":"測試","context":"moon"}]',
+      USER,
+      NOW,
+    );
+    expect(moon).toHaveLength(1);
+    expect(moon[0]!.context).toBe("any");
+    // 缺 content → 整筆丟棄（不寫空記憶）
+    expect(parseExtraction('[{"memoryType":"semantic","context":"home"}]', USER, NOW)).toEqual([]);
+  });
 });
 
 describe("AstraAgent.chat", () => {
@@ -107,7 +120,8 @@ describe("AstraAgent.chat", () => {
     const agent = new AstraAgent(store, mockLlm, USER);
     const result = await agent.chat("明天早上記得提醒我先去加油", "driving", NOW);
 
-    expect(result.reply).toContain("加油");
+    // 綁定記憶素材而非「加油」單詞（既可指 refuel 也可指鼓勵 devin P1）
+    expect(result.reply).toMatch(/建國路|中油|加油站/);
     // 對話 prompt 收到了撈回的記憶
     expect(calls[0]!.system).toContain("建國路中油");
     // 萃取的記憶真的落庫（可被之後 recall 撈到）

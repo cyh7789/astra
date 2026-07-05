@@ -67,15 +67,17 @@ describe("recall end-to-end (three-scene demo data)", () => {
     for (const key of ["refuel-reminder", "gas-station-pref", "client-meeting"]) {
       expect(got).toContain(ids.get(key));
     }
-    // 每筆都有訊號分解（demo UI 的透明度展示用）
+    // 每筆都有訊號分解（demo UI 的透明度展示用）— 三鍵齊備且 score 落在正規化區間
     for (const m of result) {
-      expect(m.signals.vector).toBeGreaterThanOrEqual(0);
-      expect(m.signals.bm25).toBeGreaterThanOrEqual(0);
-      expect(m.signals.recency).toBeGreaterThanOrEqual(0);
+      expect(m.signals).toHaveProperty("vector");
+      expect(m.signals).toHaveProperty("bm25");
+      expect(m.signals).toHaveProperty("recency");
+      expect(m.score).toBeGreaterThanOrEqual(0);
+      expect(m.score).toBeLessThanOrEqual(1);
     }
   });
 
-  it("scene 2 office: BM25 puts 王經理報價 memory first", async () => {
+  it("scene 2 office: BM25 主導把王經理報價排第一（驗訊號來源，非只驗位置 devin P0）", async () => {
     const result = await store.recall({
       userId: DEMO_USER,
       query: "上次跟王經理談的報價是多少？",
@@ -84,6 +86,11 @@ describe("recall end-to-end (three-scene demo data)", () => {
       now: NOW,
     });
     expect(result[0]!.id).toBe(ids.get("quote-meeting"));
+    // 排第一那筆的 BM25 訊號是全體最高（專有名詞精確匹配主導），不是靠其他訊號抖上來 —
+    // 驗訊號來源而非只驗位置（devin P0）
+    const topBm25 = Math.max(...result.map((m) => m.signals.bm25));
+    expect(result[0]!.signals.bm25).toBe(topBm25);
+    expect(result[0]!.signals.bm25).toBeGreaterThan(0);
   });
 
   it("scene 3 home: cross-scene memory (said in car, tagged home) is in candidates", async () => {

@@ -119,6 +119,34 @@ describe("session 邊角案例", () => {
     expect(payloads.some((p) => p.includes("Duplicate call"))).toBe(true);
   });
 
+  it("敏感工具重複呼叫也被地板攔（devin P2：不只 set_light）", async () => {
+    // 先確認鎖門 → 執行後 confirmedTools 立即重上鎖，同輪第二次 set_lock 走確認/重複攔截，不連發
+    const queue = [
+      '{"action":"tool_call","tool":"set_lock","args":{"lockTargetState":"secured"}}',
+      '{"action":"reply","text":"要鎖門嗎？"}',
+      '{"action":"tool_call","tool":"set_lock","args":{"lockTargetState":"secured"}}',
+      '{"action":"tool_call","tool":"set_lock","args":{"lockTargetState":"secured"}}', // 同參數再來
+      '{"action":"reply","text":"門鎖好了"}',
+    ];
+    const llm: LlmClient = { async complete() { return queue.shift()!; } };
+    const s = await ChatSession.open(store, llm, USER, "home", NOW, { extract: false });
+    await s.send("鎖門", NOW);
+    const t = await s.send("好", NOW);
+    expect(t.toolCalls.filter((c) => c.tool === "set_lock")).toHaveLength(1); // 只執行一次
+  });
+
+  it("參數邊界：上界與下界越界都被攔（devin P2）", async () => {
+    for (const bad of [31, 5, -1]) {
+      const llm = queueLlm([
+        `{"action":"tool_call","tool":"set_climate","args":{"temperature":${bad}}}`,
+        '{"action":"reply","text":"這個溫度我設不了"}',
+      ]);
+      const s = await ChatSession.open(store, llm, USER, "driving", NOW, { extract: false });
+      const t = await s.send("設溫度", NOW);
+      expect(t.toolCalls).toHaveLength(0); // 越界不執行
+    }
+  });
+
   it("參數邊界：驗證錯誤回饋後模型修正重試", async () => {
     const llm = queueLlm([
       '{"action":"tool_call","tool":"set_climate","args":{"temperature":31}}', // 超界

@@ -44,6 +44,6 @@ describe("reranker 精排層", () => {
     const store = new MemoryStore(db.pool, new FakeEmbedder(), broken);
     const out = await store.recall({ userId: USER, query: "高鐵", context: "office", topK: 2, now: NOW });
     expect(out).toHaveLength(2);
-    expect(out[0]!.rerankScore).toBeUndefined();
+    for (const m of out) expect(m.rerankScore).toBeUndefined(); // 每筆都不殘留（devin P2）
   });
 });

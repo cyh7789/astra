@@ -120,6 +120,12 @@ const CASES: EvalCase[] = [
 ];
 
 const NOW = new Date();
+// FakeEmbedder 下 recall 幾乎必中正確記憶 = 自證自己，換真 embedder 的檢索品質從不被驗（devin P0）。
+// 預設 fake 只當語法冒煙；要驗真檢索必須 EMBEDDER=voyage/vertex，或加 --allow-fake 明示放行。
+if ((process.env.EMBEDDER ?? "fake") === "fake" && !process.argv.includes("--allow-fake")) {
+  console.error("chat-eval 用 FakeEmbedder 等於自證自己 — 設 EMBEDDER=voyage 或加 --allow-fake 明示");
+  process.exit(2);
+}
 const llm = process.env.EVAL_LLM === "claude" ? new ClaudeCliClient("sonnet") : new GeminiClient();
 console.error(`eval llm: ${llm.constructor.name} / embedder: ${process.env.EMBEDDER ?? "fake"}`);
 

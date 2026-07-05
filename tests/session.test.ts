@@ -191,6 +191,21 @@ describe("ChatSession 持久化與跨終端接續", () => {
     expect(payloads.some((p) => p.includes("SYSTEM_GUARD:"))).toBe(true);
   });
 
+  it("人命地板涵蓋多種 hazard：smoke_detected + 無回應也逼出 emergency_call（devin P1）", async () => {
+    const queue = [
+      '{"action":"reply","text":"偵測到濃煙，請注意"}', // 該被攔
+      '{"action":"tool_call","tool":"emergency_call","args":{"service":"119","reason":"smoke, unresponsive"}}',
+      '{"action":"reply","text":"已通報 119"}',
+    ];
+    const llm: LlmClient = { async complete() { return queue.shift()!; } };
+    const s = await ChatSession.open(store, llm, DEMO_USER, "home", NOW, { extract: false });
+    const t = await s.send(
+      'HOME_EVENT: {"type":"smoke_detected","room":"kitchen"}\nUSER_NO_RESPONSE',
+      NOW,
+    );
+    expect(t.toolCalls.some((c) => c.tool === "emergency_call")).toBe(true);
+  });
+
   it("人命地板不被敏感 nudge 花掉：危險事件 + 開窗後 reply 仍逼出 emergency_call（devin P0）", async () => {
     // 模型在危險事件下先做無關動作（開窗）再想 reply — 舊版 floorNudged 被這個 reply 花掉後，
     // 後續 reply 就跳過 hazard 地板，119 永不觸發。人命地板必須每個 reply 都攔到打了為止。
