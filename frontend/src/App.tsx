@@ -82,8 +82,8 @@ export default function App() {
     } catch (e) {
       setMessages((m) => [...m, { role: "system", text: `error: ${(e as Error).message}` }]);
     } finally {
+      // activity 不清 — 回覆出現後工具 feed 留在畫面（下一輪 send 開頭才清），太快消失會看不到
       setBusy(false);
-      setActivity([]);
     }
   }, []);
 
@@ -135,6 +135,7 @@ export default function App() {
           activity={activity}
           deviceRows={deviceState ? deviceRows(deviceState, context) : []}
           mapsUrl={mapsUrl}
+          geoStatus={geo.status}
           sourcesPanel={
             <DataSources geoStatus={geo.status} disabled={disabledSources} onToggle={toggleSource} />
           }

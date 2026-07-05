@@ -3,6 +3,7 @@ import { useLiveStt } from "../hooks/useLiveStt.js";
 import { useRecorder } from "../hooks/useRecorder.js";
 import { createAsciiField, type AsciiField } from "../stage/ascii-field.js";
 import type { ToolCall } from "../api.js";
+import type { GeoStatus } from "../hooks/useGeo.js";
 import type { DeviceRow } from "./DeviceBoard.js";
 import { MicIcon } from "./icons.js";
 
@@ -21,6 +22,7 @@ export function Stage({
   activity,
   deviceRows,
   mapsUrl,
+  geoStatus,
   sourcesPanel,
   onSend,
   onSwitchScene,
@@ -33,6 +35,7 @@ export function Stage({
   activity: ToolCall[];
   deviceRows: DeviceRow[];
   mapsUrl: string | null;
+  geoStatus: GeoStatus;
   sourcesPanel: React.ReactNode;
   onSend: (text: string) => void;
   onSwitchScene: (scene: string) => void;
@@ -166,6 +169,16 @@ export function Stage({
             >
               data
             </button>
+            <span
+              title={
+                geoStatus === "granted"
+                  ? "location live — weather/POI/routes use real data"
+                  : "no location — running on mock data"
+              }
+              className={geoStatus === "granted" ? "text-[#8fd0a0]" : "text-[#e88a8a] opacity-80"}
+            >
+              {geoStatus === "granted" ? "● GPS" : geoStatus === "pending" ? "… GPS" : "○ MOCK"}
+            </span>
           </nav>
         </header>
 
@@ -191,22 +204,28 @@ export function Stage({
           </div>
         )}
 
-        {busy && (
-          <div className="absolute bottom-[120px] left-[6%] space-y-1 text-[11px] tracking-[.05em]">
+        {(busy || activity.length > 0) && (
+          <div className="absolute bottom-[120px] left-[6%] space-y-1.5 text-[12px] tracking-[.05em]">
             {activity.map((t, i) => {
               const ok = t.result?.ok !== false;
               return (
-                <div key={i} className="anim-rise text-[#9b8a72]">
+                <div
+                  key={i}
+                  className="anim-rise text-[#e8ddcf]"
+                  style={{ textShadow: "0 0 12px #0a0806" }}
+                >
                   <span className={ok ? "text-[#f2c184]" : "text-[#e88a8a]"}>⚙</span> {t.tool}
-                  <span className="ml-1.5 opacity-60">
-                    {ok ? String(t.result?.source === "live" ? "· live" : "") : "· failed"}
+                  <span className={ok ? "ml-1.5 text-[#9cc8e8]" : "ml-1.5 text-[#e88a8a]"}>
+                    {ok ? (t.result?.source === "live" ? "· live" : "") : "· failed"}
                   </span>
                 </div>
               );
             })}
-            <div className="text-[#58503f]">
-              {activity.length === 0 ? "thinking…" : "working…"}
-            </div>
+            {busy && (
+              <div className="animate-pulse text-[#f2c184]">
+                {activity.length === 0 ? "thinking…" : "working…"}
+              </div>
+            )}
           </div>
         )}
 
