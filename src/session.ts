@@ -1,5 +1,6 @@
 import { buildExtractionPrompt, parseExtraction } from "./agent.js";
 import { MIN_VECTOR_SIM, MIN_VECTOR_SIM_INTENT } from "./config.js";
+import { formatLocalTime } from "./demo-time.js";
 import type { GuardedMemory } from "./guards.js";
 import { applyGuards, DEFAULT_GUARDS } from "./guards.js";
 import type { LlmClient } from "./llm.js";
@@ -311,10 +312,11 @@ export class ChatSession {
     const { system, working, tools, toolCalls, pendingToolHits, message, now } = ctx;
     for (let i = 1; i <= MAX_TURNS; i++) {
       ctx.calls++;
-      // 時間戳放尾端、分鐘粒度：每輪資料不污染 prefix
+      // 時間戳放尾端、分鐘粒度：每輪資料不污染 prefix。本地時區 — toISOString 是 UTC，
+      // 模型會把「05:56」當真唸給使用者（7/5 阿毛實測）
       const raw = await llm.complete(
         system,
-        [...working, `(Current time: ${now.toISOString().slice(0, 16)})`].join("\n"),
+        [...working, `(Current time: ${formatLocalTime(now)})`].join("\n"),
       );
       const action = parseAction(raw);
 

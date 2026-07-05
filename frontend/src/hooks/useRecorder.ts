@@ -4,9 +4,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
  *  MediaRecorder 連續錄、VAD 只決定切點：speech→silence 800ms 就收整段送 /api/stt。
  *  段落從上一個切點開始（含前置靜音），所以字頭零損失；純靜音段每 5 秒丟棄不送。 */
 
-const SPEECH_RMS = 0.015; // 講話門檻（一般麥克風底噪 ~0.003-0.008）
-const SILENCE_MS = 800; // 講完停這麼久 = 一句結束
+const SPEECH_RMS = 0.03; // 講話門檻（一般麥克風底噪 ~0.003-0.008；0.015 會被冷氣/風扇誤觸）
+const SPEECH_MIN_TICKS = 3; // 連續超門檻 300ms 才算真的在講話 — 單發突刺（關門聲、喀噠）不算
+const SILENCE_MS = 900; // 講完停這麼久 = 一句結束
 const IDLE_ROTATE_MS = 5_000; // 整段都沒人講話就丟棄重錄，避免段落無限長
+const SUPPRESS_TAIL_MS = 400; // TTS 結束後喇叭殘響仍在 — suppress 多蓋一小段
 const TICK_MS = 100;
 
 export interface RecorderController {
@@ -34,6 +36,7 @@ export function useRecorder(onFinal: (text: string) => void): RecorderController
   const onFinalRef = useRef(onFinal);
   onFinalRef.current = onFinal;
   const suppressedRef = useRef(false);
+  const suppressedUntilRef = useRef(0);
   // 一次 start 的所有資源掛在同一個 session 物件 — stop/重進場景不留殭屍 track
   interface MicSession {
     stream: MediaStream;
@@ -94,6 +97,7 @@ export function useRecorder(onFinal: (text: string) => void): RecorderController
           setListening(true);
 
           let hadSpeech = false;
+          let speechTicks = 0;
           let lastSpeechAt = 0;
           let segStart = 0;
           let sendOnStop = false;
@@ -113,6 +117,7 @@ export function useRecorder(onFinal: (text: string) => void): RecorderController
             rec.start();
             s.rec = rec;
             hadSpeech = false;
+            speechTicks = 0;
             segStart = performance.now();
           };
           newSegment();
@@ -131,9 +136,15 @@ export function useRecorder(onFinal: (text: string) => void): RecorderController
               for (let i = 0; i < buf.length; i++) sum += buf[i]! * buf[i]!;
               const rms = Math.sqrt(sum / buf.length);
               const now = performance.now();
-              if (rms > SPEECH_RMS && !suppressedRef.current) {
-                hadSpeech = true;
-                lastSpeechAt = now;
+              const suppressed = suppressedRef.current || now < suppressedUntilRef.current;
+              if (rms > SPEECH_RMS && !suppressed) {
+                speechTicks++;
+                if (speechTicks >= SPEECH_MIN_TICKS) {
+                  hadSpeech = true;
+                  lastSpeechAt = now;
+                }
+              } else {
+                speechTicks = 0;
               }
               if (hadSpeech && now - lastSpeechAt > SILENCE_MS) rotate(true);
               else if (!hadSpeech && now - segStart > IDLE_ROTATE_MS) rotate(false);
@@ -151,6 +162,10 @@ export function useRecorder(onFinal: (text: string) => void): RecorderController
   );
 
   const setSuppressed = useCallback((on: boolean) => {
+    // 解除時多蓋一段殘響尾巴 — TTS onend 之後喇叭聲還沒完全消
+    if (!on && suppressedRef.current) {
+      suppressedUntilRef.current = performance.now() + SUPPRESS_TAIL_MS;
+    }
     suppressedRef.current = on;
   }, []);
 

@@ -8,6 +8,8 @@
  *  - 模型可見字串（description/argsSpec/驗證錯誤）一律英文（system prompt 語言政策）。
  */
 
+import { demoMeetingTime } from "./demo-time.js";
+
 export interface DeviceTool {
   name: string;
   context: string;
@@ -277,7 +279,8 @@ const office: DeviceTool[] = [
     validate: () => null,
     execute: () => ({
       ok: true,
-      events: [{ time: "09:00", title: "與王經理客戶會議", room: "A 會議室" }],
+      // 會議時刻跟著真實時鐘走（now+3h）— 寫死 09:00 的話下午 demo 會變成「會議已經過了」
+      events: [{ time: demoMeetingTime().time, title: "與王經理客戶會議", room: "A 會議室" }],
     }),
   },
   {
@@ -300,7 +303,8 @@ const universal: DeviceTool[] = [
     description: "Play music (song/artist/genre/playlist)",
     argsSpec: '{"query": "what to play (optional = recommend by preference)"}',
     validate: () => null,
-    execute: (a) => ({ ok: true, device: "music", playing: a.query ?? "依偏好推薦", volume: 40 }),
+    // ?? 接不住空字串 "" — 空 query 時裝置板 music 列會顯示空白（7/4 已知 bug 順手修）
+    execute: (a) => ({ ok: true, device: "music", playing: a.query || "依偏好推薦", volume: 40 }),
   },
   {
     name: "make_call",

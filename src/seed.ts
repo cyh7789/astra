@@ -1,5 +1,6 @@
 import { pathToFileURL } from "node:url";
 import { createPool } from "./db.js";
+import { demoMeetingTime } from "./demo-time.js";
 import { selectEmbedder } from "./embedder-select.js";
 import type { MemoryInput } from "./store.js";
 import { MemoryStore } from "./store.js";
@@ -10,6 +11,8 @@ export const DEMO_USER = "00000000-0000-0000-0000-000000000001";
 export function demoMemories(now: Date): Array<MemoryInput & { key: string }> {
   const h = 3_600_000;
   const d = 24 * h;
+  // 會議時刻跟 get_calendar mock 同一條規則（now+3h）— 出發提醒劇本任何時段測都成立
+  const meeting = demoMeetingTime(now);
   return [
     // 場景 1：早晨車上
     {
@@ -35,7 +38,7 @@ export function demoMemories(now: Date): Array<MemoryInput & { key: string }> {
       userId: DEMO_USER,
       context: "office",
       memoryType: "episodic",
-      content: "今天 09:00 與王經理客戶會議（行事曆同步）",
+      content: `${meeting.dayWord} ${meeting.time} 與王經理客戶會議（行事曆同步）`,
       importance: 0.9,
       privacyLevel: "cross-context",
       createdAt: new Date(now.getTime() - 18 * h),
