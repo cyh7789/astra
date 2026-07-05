@@ -51,7 +51,8 @@ export class MemoryWindow {
       existing.score = Math.max(existing.score, opts.score);
       existing.lastRelevantTurn = opts.turn;
       existing.pinned = existing.pinned || (opts.pinned ?? false);
-      existing.expiresTurn = undefined; // 再次相關 → 解除 TTL
+      // 再次「直接相關」才解除 TTL — link 擴展是低訊號連帶，不該讓 event 條目長駐污染場景（devin P2-3）
+      if (opts.via !== "link") existing.expiresTurn = undefined;
       return false;
     }
     this.byId.set(memory.id, {

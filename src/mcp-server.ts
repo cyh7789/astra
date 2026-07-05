@@ -124,11 +124,15 @@ export function createAstraServer(store: MemoryStore, userId: string): McpServer
     },
     async (args) => {
       try {
-        const m = await store.update(args.id, {
-          content: args.content,
-          importance: args.importance,
-          privacyLevel: args.privacyLevel,
-        });
+        const m = await store.update(
+          args.id,
+          {
+            content: args.content,
+            importance: args.importance,
+            privacyLevel: args.privacyLevel,
+          },
+          userId, // 知道 id ≠ 擁有記憶 — 資料層 user 隔離
+        );
         return jsonResult({ id: m.id, content: m.content, importance: m.importance });
       } catch (err) {
         return errorResult(err);
@@ -144,7 +148,7 @@ export function createAstraServer(store: MemoryStore, userId: string): McpServer
     },
     async (args) => {
       try {
-        await store.forget(args.id);
+        await store.forget(args.id, userId);
         return jsonResult({ forgotten: args.id });
       } catch (err) {
         return errorResult(err);

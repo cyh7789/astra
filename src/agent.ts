@@ -1,3 +1,6 @@
+/** ⚠ 注意（devin P1-3）：AstraAgent 是無工具/無記憶窗/無敏感確認的純對話舊路徑（chat-cli 用）—
+ *  production 對話一律走 ChatSession（src/session.ts）。本檔的 buildExtractionPrompt /
+ *  parseExtraction 是共用的記憶萃取器，被 ChatSession 引用，不屬於棄用範圍。 */
 import type { GuardedMemory } from "./guards.js";
 import type { LlmClient } from "./llm.js";
 import type { MemoryInput, MemoryStore, MemoryType } from "./store.js";
@@ -79,7 +82,11 @@ export function parseExtraction(
       )
       .map((x) => ({
         userId,
-        context: typeof x.context === "string" ? x.context : "any",
+        // 白名單 — 萃取 prompt 明定四值；模型輸出不可信，亂值落 "any"（不落當前場景：
+        // 萃取語意是「依主題分類」，家事在車上講歸 home）
+        context: ["driving", "office", "home", "any"].includes(x.context as string)
+          ? (x.context as string)
+          : "any",
         memoryType: x.memoryType as MemoryType,
         content: x.content as string,
         importance: typeof x.importance === "number" ? x.importance : undefined,

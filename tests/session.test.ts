@@ -149,6 +149,26 @@ describe("ChatSession 持久化與跨終端接續", () => {
     expect(t2.reply).toContain("先不鎖");
   });
 
+  it("敏感解鎖不跨輪殘留：使用者拒絕後，之後模型直接 set_lock 仍要被攔（devin P0-1）", async () => {
+    const queue = [
+      // T1：請求鎖門 → 被攔 → 問使用者
+      '{"action":"tool_call","tool":"set_lock","args":{"lockTargetState":"secured"}}',
+      '{"action":"reply","text":"要幫你把門鎖上嗎？"}',
+      // T2：使用者拒絕 → 模型尊重（nudge 一次後放行）
+      '{"action":"reply","text":"好，先不鎖"}',
+      '{"action":"reply","text":"好，先不鎖，需要再叫我"}',
+      // T3：不相干話題，模型卻直接鎖門（幻覺/注入）→ 必須重新被攔，不能吃 T2 殘留的解鎖
+      '{"action":"tool_call","tool":"set_lock","args":{"lockTargetState":"secured"}}',
+      '{"action":"reply","text":"門要鎖嗎？"}',
+    ];
+    const llm: LlmClient = { async complete() { return queue.shift()!; } };
+    const s = await ChatSession.open(store, llm, DEMO_USER, "home", NOW, { extract: false });
+    await s.send("幫我把門鎖上", NOW);
+    await s.send("先不要好了", NOW);
+    const t3 = await s.send("今天天氣如何", NOW);
+    expect(t3.toolCalls.map((c) => c.tool)).not.toContain("set_lock"); // 解鎖不得跨輪殘留
+  });
+
   it("行為地板：危險事件 + 無回應必須 emergency_call，reply 會被攔", async () => {
     const queue = [
       '{"action":"reply","text":"請注意安全"}', // 該被地板攔

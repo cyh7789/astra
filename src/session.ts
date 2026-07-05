@@ -301,6 +301,10 @@ export class ChatSession {
       replyText = await this.driveLoop(this.strongLlm, ctx);
     }
 
+    // 敏感解鎖只在本輪有效：使用者確認後模型當輪執行（執行即上鎖 :489）；若模型沒執行
+    // （使用者其實是拒絕），解鎖不得殘留 — 否則之後任何一輪模型都能免確認直接執行（devin P0-1）
+    this.confirmedTools.clear();
+
     const finalReply =
       replyText ?? "(Interrupted: too many consecutive actions — please tell me again what you need.)";
     this.transcript.push(`User: ${message}`, `(You): ${finalReply}`);
@@ -378,8 +382,13 @@ export class ChatSession {
           action.args.type === "semantic" || action.args.type === "procedural"
             ? action.args.type
             : "episodic";
+        // context 白名單：模型輸出不可信 — 寫成 "any" 等於把 private 記憶升成全場景可見（devin P1-1）。
+        // 跨場景可見性的唯一正道是 privacy_level / handoff 穿梭，不是 context 欄位。
+        const KNOWN_CONTEXTS = ["driving", "office", "home"];
         const targetContext =
-          typeof action.args.context === "string" && action.args.context ? action.args.context : this.context;
+          typeof action.args.context === "string" && KNOWN_CONTEXTS.includes(action.args.context)
+            ? action.args.context
+            : this.context;
         let saved: Memory;
         try {
           saved = await this.store.remember({

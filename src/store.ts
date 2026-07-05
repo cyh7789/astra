@@ -130,10 +130,12 @@ export class MemoryStore {
     return rowToMemory(r.rows[0]);
   }
 
-  async get(id: string): Promise<Memory | null> {
+  // userId 帶了就過濾 — 知道 id 不代表擁有那筆記憶（devin P1-5，MCP 入口必帶）
+  async get(id: string, userId?: string): Promise<Memory | null> {
     const r = await this.pool.query(
-      `SELECT ${MEMORY_COLS} FROM memories WHERE id = $1 AND deleted_at IS NULL`,
-      [id],
+      `SELECT ${MEMORY_COLS} FROM memories WHERE id = $1 AND deleted_at IS NULL
+         AND ($2::uuid IS NULL OR user_id = $2)`,
+      [id, userId ?? null],
     );
     return r.rows[0] ? rowToMemory(r.rows[0]) : null;
   }
@@ -146,6 +148,7 @@ export class MemoryStore {
       privacyLevel?: PrivacyLevel;
       expiresAt?: Date | null;
     },
+    userId?: string,
   ): Promise<Memory> {
     const embedding =
       patch.content !== undefined ? await this.embedder.embed(patch.content) : null;
@@ -156,7 +159,7 @@ export class MemoryStore {
          importance = COALESCE($4, importance),
          privacy_level = COALESCE($5, privacy_level),
          expires_at = CASE WHEN $6 THEN $7 ELSE expires_at END
-       WHERE id = $1 AND deleted_at IS NULL
+       WHERE id = $1 AND deleted_at IS NULL AND ($8::uuid IS NULL OR user_id = $8)
        RETURNING ${MEMORY_COLS}`,
       [
         id,
@@ -166,16 +169,18 @@ export class MemoryStore {
         patch.privacyLevel ?? null,
         patch.expiresAt !== undefined,
         patch.expiresAt ?? null,
+        userId ?? null,
       ],
     );
     if (!r.rows[0]) throw new Error(`memory not found: ${id}`);
     return rowToMemory(r.rows[0]);
   }
 
-  async forget(id: string): Promise<void> {
+  async forget(id: string, userId?: string): Promise<void> {
     await this.pool.query(
-      "UPDATE memories SET deleted_at = now() WHERE id = $1 AND deleted_at IS NULL",
-      [id],
+      `UPDATE memories SET deleted_at = now()
+        WHERE id = $1 AND deleted_at IS NULL AND ($2::uuid IS NULL OR user_id = $2)`,
+      [id, userId ?? null],
     );
   }
 
@@ -199,10 +204,13 @@ export class MemoryStore {
        )
        WHERE deleted_at IS NULL
          AND (expires_at IS NULL OR expires_at > $4)
-         AND ($6 OR context = $3 OR context = 'any' OR privacy_level IN ('cross-context', 'public'))
+         AND (context = $3 OR context = 'any' OR privacy_level IN ('cross-context', 'public'))
        ORDER BY vector_sim DESC
        LIMIT $5`,
-      [q.userId, encodeVector(queryEmbedding), q.context, now, CANDIDATE_LIMIT, q.scope === "cross"],
+      // 隱私規則對所有 scope 一視同仁 — 舊版 scope=cross 會短路整個過濾、把他場景 private
+      // 漏進事件/全域檢索（devin P0-2）。他場景記憶想跨場景，唯一途徑是 privacy_level 升級
+      // 或 handoffCandidates 的 source_context 穿梭；cross 保留為介面語意（recall_memory scope=all）。
+      [q.userId, encodeVector(queryEmbedding), q.context, now, CANDIDATE_LIMIT],
     );
     return r.rows.map((row) => ({ ...rowToMemory(row), vectorSim: Number(row.vector_sim) }));
   }

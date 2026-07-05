@@ -39,6 +39,22 @@ describe("recall end-to-end (three-scene demo data)", () => {
     );
   });
 
+  it("cross scope 不得漏他場景 private：在家撈王經理報價（office private）必須空手（devin P0-2）", async () => {
+    const candidates = await store.fetchCandidates({
+      userId: DEMO_USER,
+      query: "王經理 報價 維護費",
+      context: "home",
+      scope: "cross",
+      now: NOW,
+    });
+    const got = new Set(candidates.map((c) => c.id));
+    // office 的 private 記憶（報價 $45,000、維護費讓步）不得出現在 home 的 cross 檢索
+    expect(got).not.toContain(ids.get("quote-meeting"));
+    expect(got).not.toContain(ids.get("wang-concern"));
+    // cross-context 級的（行事曆同步會議）仍可跨場景
+    expect(got).toContain(ids.get("client-meeting"));
+  });
+
   it("scene 1 driving: recall top-5 covers reminder + station + meeting", async () => {
     const result = await store.recall({
       userId: DEMO_USER,

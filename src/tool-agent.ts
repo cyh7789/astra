@@ -1,3 +1,6 @@
+/** ⚠ DEPRECATED（devin P1-2）：ToolAgent 是 Phase 4 早期 spike 的工具迴圈，production 不使用 —
+ *  正宗路徑是 ChatSession（src/session.ts），其敏感確認為「跨輪確認、單輪有效」，與本檔語意不同。
+ *  只有 parseAction 仍被 session.ts 引用；ToolAgent class 僅供 scripts/tool-spike.ts 歷史參考。 */
 import type { GuardedMemory } from "./guards.js";
 import type { LlmClient } from "./llm.js";
 import type { MemoryStore } from "./store.js";
