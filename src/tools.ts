@@ -21,7 +21,9 @@ async function liveOr(
   if (!env?.location || env.disabled?.includes(sourceKey)) return { ...mock, source: "mock" };
   try {
     return await live(env.location);
-  } catch {
+  } catch (err) {
+    // 為何退 mock 要留痕 — demo 操作者才能區分「沒 GPS / 額度爆 / schema 炸」（devin P0）
+    console.warn(`[live:${sourceKey}] fell back to mock:`, (err as Error).message);
     return { ...mock, source: "mock" };
   }
 }
