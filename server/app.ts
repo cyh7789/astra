@@ -4,6 +4,7 @@ import type { LlmClient } from "../src/llm.js";
 import { DEMO_USER, seed } from "../src/seed.js";
 import { ChatSession } from "../src/session.js";
 import type { MemoryStore } from "../src/store.js";
+import type { Transcriber } from "../src/stt.js";
 import { initialDeviceState, reduceDeviceState } from "./device-state.js";
 
 /** Fastify 薄殼（demo UI 設計文件）：所有智慧在 ChatSession 後面，這裡只做
@@ -17,6 +18,8 @@ export interface AppDeps {
   llm: LlmClient;
   /** 動態路由 v1：本地模型收斂失敗時接手的強模型 */
   strongLlm?: LlmClient;
+  /** server 端 STT（瀏覽器無關）；沒掛就回 503，前端降級成純打字 */
+  transcribe?: Transcriber;
 }
 
 export function buildApp(deps: AppDeps): FastifyInstance {
@@ -54,6 +57,22 @@ export function buildApp(deps: AppDeps): FastifyInstance {
       pinned: e.pinned,
     }));
   }
+
+  // MediaRecorder 送來的原始音訊（audio/webm、audio/mp4 等）— 整包收進 Buffer
+  app.addContentTypeParser(/^audio\//, { parseAs: "buffer" }, (_req, body, done) =>
+    done(null, body),
+  );
+
+  /** server 端 STT：收一段音訊、回轉錄文字。與對話回合無關，不進 turnQueue。 */
+  app.post("/api/stt", async (req, reply) => {
+    if (!deps.transcribe) return reply.code(503).send({ error: "stt not configured" });
+    const audio = req.body as Buffer;
+    if (!Buffer.isBuffer(audio) || audio.length === 0) {
+      return reply.code(400).send({ error: "body must be raw audio bytes" });
+    }
+    const text = await deps.transcribe(audio, req.headers["content-type"] ?? "audio/webm");
+    return { text };
+  });
 
   app.post("/api/chat", async (req, reply) => {
     const { message } = (req.body ?? {}) as { message?: unknown };

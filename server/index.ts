@@ -6,6 +6,7 @@ import { createPool } from "../src/db.js";
 import { selectEmbedder, selectReranker } from "../src/embedder-select.js";
 import { ClaudeCliClient, GeminiClient } from "../src/llm.js";
 import { MemoryStore } from "../src/store.js";
+import { createGeminiTranscriber } from "../src/stt.js";
 import { buildApp } from "./app.js";
 
 /** demo server 入口。跑法：
@@ -20,7 +21,7 @@ const strongLlm =
     ? new ClaudeCliClient(process.env.STRONG_MODEL ?? "sonnet")
     : undefined;
 
-const app = buildApp({ pool, store, llm, strongLlm });
+const app = buildApp({ pool, store, llm, strongLlm, transcribe: createGeminiTranscriber() });
 
 // 前端靜態檔（單一容器出貨）：有 build 產物才掛 — 開發期 vite dev server 走 proxy
 const dist = join(dirname(fileURLToPath(import.meta.url)), "..", "frontend", "dist");

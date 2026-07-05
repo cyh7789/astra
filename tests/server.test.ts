@@ -40,6 +40,44 @@ describe("demo server API", () => {
     return buildApp({ pool: db.pool, store, llm });
   }
 
+  it("stt：raw 音訊進 transcriber、回轉錄文字；空 body 拒收、沒掛 transcriber 回 503", async () => {
+    const seen: Array<{ bytes: number; mime: string }> = [];
+    const app = buildApp({
+      pool: db.pool,
+      store,
+      llm: queueLlm([]),
+      transcribe: async (audio, mime) => {
+        seen.push({ bytes: audio.length, mime });
+        return "幫我找附近的早餐店";
+      },
+    });
+    const ok = await app.inject({
+      method: "POST",
+      url: "/api/stt",
+      headers: { "content-type": "audio/webm" },
+      payload: Buffer.from([1, 2, 3, 4]),
+    });
+    expect(ok.statusCode).toBe(200);
+    expect(ok.json()).toEqual({ text: "幫我找附近的早餐店" });
+    expect(seen).toEqual([{ bytes: 4, mime: "audio/webm" }]);
+
+    const empty = await app.inject({
+      method: "POST",
+      url: "/api/stt",
+      headers: { "content-type": "audio/webm" },
+      payload: Buffer.alloc(0),
+    });
+    expect(empty.statusCode).toBe(400);
+
+    const noStt = await appWith(queueLlm([])).inject({
+      method: "POST",
+      url: "/api/stt",
+      headers: { "content-type": "audio/webm" },
+      payload: Buffer.from([1]),
+    });
+    expect(noStt.statusCode).toBe(503);
+  });
+
   it("chat：工具執行折進裝置板、回窗快照；空 message 拒收", async () => {
     const app = appWith(
       queueLlm([

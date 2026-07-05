@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useSpeech } from "../hooks/useSpeech.js";
+import { useRecorder } from "../hooks/useRecorder.js";
 import { createAsciiField, type AsciiField } from "../stage/ascii-field.js";
 import type { DeviceRow } from "./DeviceBoard.js";
 import { MicIcon } from "./icons.js";
@@ -35,24 +35,34 @@ export function Stage({
   const [draft, setDraft] = useState("");
   const spokenId = useRef(0);
 
-  // 語音偵測：push-to-talk final 填輸入列（可修正）；driving 免持 final 直接送出
+  // 語音偵測（server 端 STT）：push-to-talk 轉錄填輸入列（可修正）；driving 免持直接送出。
+  // 小夏還在回的時候講的話先存著，回完自動送 — 免持對話不掉句。
   const handsFree = context === "driving";
-  const speech = useSpeech(
+  const busyRef = useRef(busy);
+  busyRef.current = busy;
+  const pendingRef = useRef("");
+  const speech = useRecorder(
     useCallback(
       (text: string) => {
-        if (!text) return;
-        if (handsFree && !busy) onSend(text);
-        else setDraft(text);
+        if (!handsFree) return setDraft(text);
+        if (busyRef.current) pendingRef.current = text;
+        else onSend(text);
       },
-      [handsFree, busy, onSend],
+      [handsFree, onSend],
     ),
   );
+  useEffect(() => {
+    if (busy || !pendingRef.current) return;
+    const queued = pendingRef.current;
+    pendingRef.current = "";
+    onSend(queued);
+  }, [busy, onSend]);
   useEffect(() => {
     fieldRef.current?.setListening(speech.listening); // 聆聽預浮現
   }, [speech.listening]);
   useEffect(() => {
     // driving = 免持預設開（「真的在跟車講話」）；離開場景收麥克風
-    if (handsFree && speech.supported) speech.start({ continuous: true });
+    if (handsFree && speech.supported) speech.start({ handsFree: true });
     else speech.stop();
     // speech 物件每 render 更新，依 handsFree 切換即可
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -82,8 +92,12 @@ export function Stage({
     u.onstart = () => {
       started = true;
       field.setSpeaking(true);
+      speech.setSuppressed(true); // 免持別把喇叭裡自己的聲音聽成使用者
     };
-    u.onend = u.onerror = () => field.setSpeaking(false);
+    u.onend = u.onerror = () => {
+      field.setSpeaking(false);
+      speech.setSuppressed(false);
+    };
     u.onboundary = () => field.punch(1); // 每個詞界 = 一記真打點
     speechSynthesis.speak(u);
     // 保底：環境沒有 TTS voice 時 speechSynthesis 靜默失敗 — 用估算時長驅動浮現，字幕不啞場
@@ -161,10 +175,18 @@ export function Stage({
 
         <div className="absolute bottom-6 left-[6%] flex w-[min(560px,52vw)] gap-2">
           <input
-            value={speech.interim || draft}
+            value={draft}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && submit()}
-            placeholder={busy ? "…" : speech.listening ? "listening…" : "Talk to ASTRA…"}
+            placeholder={
+              busy
+                ? "…"
+                : speech.processing
+                  ? "transcribing…"
+                  : speech.listening
+                    ? "listening…"
+                    : "Talk to ASTRA…"
+            }
             className="pointer-events-auto grow border border-[#58503f] bg-[#0a0806cc] px-3 py-2 text-sm text-[#f3e7d3] outline-none placeholder:text-[#58503f] focus:border-[#f2c184]"
           />
           {speech.supported && (
