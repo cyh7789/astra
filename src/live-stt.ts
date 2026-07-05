@@ -4,6 +4,9 @@
  *  - Live 內建 VAD：使用者講完自動 turn → turnComplete 就是句子邊界 */
 
 const LIVE_MODEL = process.env.LIVE_STT_MODEL ?? "models/gemini-2.5-flash-native-audio-latest";
+// 語言提示 — speechConfig.languageCode 在此模型全被拒（7/5 實測 cmn-TW/cmn-CN 皆 1007），
+// 只能走 systemInstruction 提示 + 自動偵測（乾淨中文實測準確）；真的飄再評估 translate 模型固定翻英
+const LIVE_LANG = process.env.LIVE_STT_LANG ?? "Taiwanese Mandarin (zh-TW) or English";
 
 export interface LiveSttSession {
   sendPcm(chunk: Buffer): void;
@@ -34,8 +37,14 @@ export function openLiveStt(handlers: LiveSttHandlers, apiKey = process.env.GEMI
         setup: {
           model: LIVE_MODEL,
           generationConfig: { responseModalities: ["AUDIO"] },
-          // 模型的回應我們不用 — 叫它極簡輸出，省時省量
-          systemInstruction: { parts: [{ text: "You are a transcription tap. Always reply with just 'ok'." }] },
+          // 模型的回應我們不用 — 叫它極簡輸出，省時省量；同時提示轉錄語言雙保險
+          systemInstruction: {
+            parts: [
+              {
+                text: `You are a transcription tap. The user speaks ${LIVE_LANG}. Always reply with just 'ok'.`,
+              },
+            ],
+          },
           inputAudioTranscription: {},
         },
       }),
