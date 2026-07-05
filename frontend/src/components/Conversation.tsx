@@ -37,10 +37,13 @@ function AstraBubble({ children }: { children: React.ReactNode }) {
 export function Conversation({
   messages,
   busy,
+  activity,
   onSend,
 }: {
   messages: Message[];
   busy: boolean;
+  /** 本輪進行中的工具活動（SSE 即時）— 過程可見 */
+  activity: ToolCall[];
   onSend: (text: string) => void;
 }) {
   const [draft, setDraft] = useState("");
@@ -131,10 +134,25 @@ export function Conversation({
         {busy && (
           <div className="anim-rise flex items-start gap-3">
             <Avatar />
-            <div className="inline-flex items-center gap-1.5 rounded-2xl rounded-tl-md bg-[color-mix(in_srgb,var(--accent)_14%,var(--panel))] px-4 py-3">
-              {[0, 1, 2].map((k) => (
-                <span key={k} className="typing-dot h-1.5 w-1.5 rounded-full bg-[var(--accent)]" />
+            <div className="space-y-1.5">
+              {activity.map((t, i) => (
+                <div
+                  key={i}
+                  className="anim-rise flex items-center gap-1.5 text-[11px] text-[var(--accent-dim)]"
+                >
+                  <span className={t.result?.ok === false ? "text-[#e88a8a]" : "text-[var(--accent)]"}>
+                    <WrenchIcon />
+                  </span>
+                  <span className="text-[var(--ink)]">{t.tool}</span>
+                  {t.result?.source === "live" && <span className="opacity-70">live</span>}
+                  {t.result?.ok === false && <span className="text-[#e88a8a]">failed</span>}
+                </div>
               ))}
+              <div className="inline-flex items-center gap-1.5 rounded-2xl rounded-tl-md bg-[color-mix(in_srgb,var(--accent)_14%,var(--panel))] px-4 py-3">
+                {[0, 1, 2].map((k) => (
+                  <span key={k} className="typing-dot h-1.5 w-1.5 rounded-full bg-[var(--accent)]" />
+                ))}
+              </div>
             </div>
           </div>
         )}

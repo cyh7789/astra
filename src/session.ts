@@ -72,6 +72,8 @@ interface LoopCtx {
   now: Date;
   /** 瀏覽器 GPS 等真實環境 — 查詢類工具打真 API 用 */
   env: ToolEnv;
+  /** 工具執行的即時回報 — demo UI 顯示過程，不然長回合看起來像卡死（阿毛 7/5） */
+  onToolCall?: (tool: string, args: Record<string, unknown>, result: Record<string, unknown>) => void;
   floorNudged: boolean;
   calls: number;
   /** 同輪已嘗試的 tool+args 簽名 — 重複呼叫地板（VoxGuard RepetitionGuard 移植） */
@@ -201,7 +203,12 @@ export class ChatSession {
     }
   }
 
-  async send(message: string, now = new Date(), env: ToolEnv = {}): Promise<SessionTurnResult> {
+  async send(
+    message: string,
+    now = new Date(),
+    env: ToolEnv = {},
+    onToolCall?: LoopCtx["onToolCall"],
+  ): Promise<SessionTurnResult> {
     this.turn++;
     this.window.beginTurn(this.turn, now);
     const event = EVENT_RE.exec(message);
@@ -276,6 +283,7 @@ export class ChatSession {
       message,
       now,
       env,
+      onToolCall,
       floorNudged: false, // 行為地板整輪只 nudge 一次（使用者可能是拒絕，不無限逼）
       calls: 0,
       attempted: new Set<string>(),
@@ -479,6 +487,7 @@ export class ChatSession {
       const result = await tool.execute(action.args, ctx.env);
       // 敏感確認單次有效：執行一次即重新上鎖，下次呼叫重走確認（7/6 edge case 衝刺抓到的語意漏洞）
       if (tool.sensitive) this.confirmedTools.delete(tool.name);
+      ctx.onToolCall?.(tool.name, action.args, result);
       toolCalls.push({ tool: tool.name, args: action.args, result });
       working.push(`(You): ${JSON.stringify(action)}`, `TOOL_RESULT: ${JSON.stringify(result)}`);
     }

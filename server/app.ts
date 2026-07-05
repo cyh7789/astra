@@ -119,6 +119,42 @@ export function buildApp(deps: AppDeps): FastifyInstance {
         : {}),
       ...(Array.isArray(disabled) ? { disabled: disabled.filter((d) => typeof d === "string") } : {}),
     };
+    // ?stream=1：SSE — 每次工具執行當下推 tool 事件（過程可見，不然長回合看起來像卡死），
+    // 最後推 done 帶完整結果。非 stream 維持一發 JSON（測試/curl 相容）。
+    const streaming = (req.query as { stream?: string }).stream === "1";
+    if (streaming) {
+      reply.raw.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        Connection: "keep-alive",
+      });
+      const push = (event: string, data: unknown) =>
+        reply.raw.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+      try {
+        const result = await enqueue(async () => {
+          const s = await ensureSession();
+          const turn = await s.send(message, new Date(), env, (tool, args, r) =>
+            push("tool", { tool, args, result: r }),
+          );
+          deviceState = reduceDeviceState(deviceState, turn.toolCalls);
+          return {
+            reply: turn.reply,
+            toolCalls: turn.toolCalls,
+            admitted: turn.admitted,
+            escalated: turn.escalated,
+            turns: turn.turns,
+            context: s.context,
+            window: windowSnapshot(s),
+            deviceState,
+          };
+        });
+        push("done", result);
+      } catch (err) {
+        push("error", { message: (err as Error).message });
+      }
+      reply.raw.end();
+      return reply;
+    }
     return enqueue(async () => {
       const s = await ensureSession();
       const turn = await s.send(message, new Date(), env);

@@ -29,6 +29,8 @@ export default function App() {
   const [announcement, setAnnouncement] = useState<Announcement | null>(null);
   // 最近一次導航的 Google Maps 直開連結（live 路線才有）— 場景切換/reset 時清
   const [mapsUrl, setMapsUrl] = useState<string | null>(null);
+  // 本輪進行中的工具活動（SSE 即時推）— 過程可見，不然長回合看起來像卡死
+  const [activity, setActivity] = useState<ToolCall[]>([]);
   const hydrated = useRef(false);
   // 真實資料雙軌：GPS 拿得到就 live、拿不到全 mock；面板可手動關單一來源
   const geo = useGeo();
@@ -59,11 +61,13 @@ export default function App() {
 
   const send = useCallback(async (text: string) => {
     setBusy(true);
+    setActivity([]);
     setMessages((m) => [...m, { role: "user", text }]);
     try {
       const r = await api.chat(text, {
         location: geoRef.current.loc,
         disabled: [...disabledRef.current],
+        onTool: (tc) => setActivity((a) => [...a, tc]),
       });
       setMessages((m) => [
         ...m,
@@ -79,6 +83,7 @@ export default function App() {
       setMessages((m) => [...m, { role: "system", text: `error: ${(e as Error).message}` }]);
     } finally {
       setBusy(false);
+      setActivity([]);
     }
   }, []);
 
@@ -127,6 +132,7 @@ export default function App() {
           context={context}
           busy={busy}
           announcement={announcement}
+          activity={activity}
           deviceRows={deviceState ? deviceRows(deviceState, context) : []}
           mapsUrl={mapsUrl}
           sourcesPanel={
@@ -179,7 +185,7 @@ export default function App() {
           {deviceState && <DeviceBoard state={deviceState} context={context} />}
           <DataSources geoStatus={geo.status} disabled={disabledSources} onToggle={toggleSource} />
         </aside>
-        <Conversation messages={messages} busy={busy} onSend={send} />
+        <Conversation messages={messages} busy={busy} activity={activity} onSend={send} />
         <aside className="overflow-y-auto border-l border-[var(--accent-faint)] p-4">
           <Inspector entries={window_} />
         </aside>

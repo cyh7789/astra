@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useLiveStt } from "../hooks/useLiveStt.js";
 import { useRecorder } from "../hooks/useRecorder.js";
 import { createAsciiField, type AsciiField } from "../stage/ascii-field.js";
+import type { ToolCall } from "../api.js";
 import type { DeviceRow } from "./DeviceBoard.js";
 import { MicIcon } from "./icons.js";
 
@@ -17,6 +18,7 @@ export function Stage({
   context,
   busy,
   announcement,
+  activity,
   deviceRows,
   mapsUrl,
   sourcesPanel,
@@ -27,6 +29,8 @@ export function Stage({
   context: string;
   busy: boolean;
   announcement: Announcement | null;
+  /** 本輪進行中的工具活動（SSE 即時）— 沒有它長回合看起來像卡死 */
+  activity: ToolCall[];
   deviceRows: DeviceRow[];
   mapsUrl: string | null;
   sourcesPanel: React.ReactNode;
@@ -184,6 +188,25 @@ export function Stage({
         {showSources && (
           <div className="pointer-events-auto absolute right-8 top-14 w-[280px] border border-[#58503f] bg-[#0a0806ee] p-3">
             {sourcesPanel}
+          </div>
+        )}
+
+        {busy && (
+          <div className="absolute bottom-[120px] left-[6%] space-y-1 text-[11px] tracking-[.05em]">
+            {activity.map((t, i) => {
+              const ok = t.result?.ok !== false;
+              return (
+                <div key={i} className="anim-rise text-[#9b8a72]">
+                  <span className={ok ? "text-[#f2c184]" : "text-[#e88a8a]"}>⚙</span> {t.tool}
+                  <span className="ml-1.5 opacity-60">
+                    {ok ? String(t.result?.source === "live" ? "· live" : "") : "· failed"}
+                  </span>
+                </div>
+              );
+            })}
+            <div className="text-[#58503f]">
+              {activity.length === 0 ? "thinking…" : "working…"}
+            </div>
           </div>
         )}
 
