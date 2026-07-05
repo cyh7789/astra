@@ -116,6 +116,23 @@ claude mcp add astra-memory -- npx tsx /path/to/astra/src/mcp-server.ts
 
 Phase 1 用確定性 FakeEmbedder（token 重疊 ≈ 相似度）讓測試不依賴外部 API；真語意（「氣炸鍋」↔「晚餐」）等 Phase 4 換 Bedrock Titan Embeddings V2。
 
+## Integration Boundary（資料源雙軌）
+
+Demo UI 的每個資料源老實標示 live / mock（頁面上的 DATA SOURCES 面板），mock 不是湊數 — 接口已定義、換 adapter 即上線：
+
+| 資料源 | 目前 | 真實接口 |
+|--------|------|---------|
+| 時鐘 | **live** — 真實時間（`ASTRA_TZ`，預設 Asia/Taipei） | — |
+| 天氣 | **live**（GPS）— Open-Meteo | 同左（production 可換付費源） |
+| 地點搜尋 | **live**(GPS) — OSM Overpass | Google Places API |
+| 導航路線 | **live**（GPS）— Nominatim + OSRM，附 Google Maps 直開連結 | 車機導航 SDK（Android Auto / CarPlay） |
+| Web 搜尋 | **live** — Gemini Google Search grounding | 同左 |
+| 行事曆 | **sim** — 事件相對真實時鐘生成 | Google Calendar / CalDAV |
+| 家電控制 | **mock** — args 已對齊 HomeKit accessory/characteristic 語彙 | homebridge / HAP-NodeJS / Matter |
+| 車身控制 | **mock** — 依車載 domain 介面設計 | 車廠 SDK（斷路：無真車不可能 live） |
+
+雙軌原則：GPS 權限拿不到、公開 API 掛掉、斷網 — demo 全部照跑（自動退 mock 並在面板誠實顯示），永遠不會死在台上。
+
 ## Roadmap
 
 | Phase | 內容 |
