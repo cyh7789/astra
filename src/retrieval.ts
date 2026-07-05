@@ -38,17 +38,20 @@ export function recencyScore(
   halfLifeHours = RECENCY_HALF_LIFE_HOURS,
 ): number {
   const ageHours = (now.getTime() - createdAt.getTime()) / 3_600_000;
+  if (!Number.isFinite(ageHours)) return 0; // invalid date → 不讓 NaN 汙染整條訊號（devin P0）
   if (ageHours <= 0) return 1;
   return Math.pow(2, -ageHours / halfLifeHours);
 }
 
-/** min-max 歸一化到 [0,1]；全部相等時回 1（訊號無鑑別度、對排序無影響）。 */
+/** min-max 歸一化到 [0,1]；全部相等時回 1（訊號無鑑別度、對排序無影響）。
+ *  非有限值先歸零 — 單一 NaN 會讓 Math.min/max 全塌成 NaN、fused 全 NaN、sort 靜默亂序（devin P0）。 */
 export function minMaxNormalize(values: number[]): number[] {
   if (values.length === 0) return [];
-  const min = Math.min(...values);
-  const max = Math.max(...values);
-  if (max === min) return values.map(() => 1);
-  return values.map((v) => (v - min) / (max - min));
+  const clean = values.map((v) => (Number.isFinite(v) ? v : 0));
+  const min = Math.min(...clean);
+  const max = Math.max(...clean);
+  if (max === min) return clean.map(() => 1);
+  return clean.map((v) => (v - min) / (max - min));
 }
 
 export interface SignalMatrix {
@@ -57,9 +60,12 @@ export interface SignalMatrix {
   recency: number[];
 }
 
-/** 三訊號加權融合。輸入應已各自歸一化。 */
+/** 三訊號加權融合。輸入應已各自歸一化。權重和正規化 → score 恆在 [0,1]，
+ *  下游用 score 當門檻的地方（window.cool floor）不因權重總和漂移（devin P2）。 */
 export function fuse(signals: SignalMatrix, w: FusionWeights): number[] {
+  const wsum = w.vector + w.bm25 + w.recency || 1;
   return signals.vector.map(
-    (v, i) => v * w.vector + signals.bm25[i]! * w.bm25 + signals.recency[i]! * w.recency,
+    (v, i) =>
+      (v * w.vector + signals.bm25[i]! * w.bm25 + signals.recency[i]! * w.recency) / wsum,
   );
 }

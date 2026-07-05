@@ -259,8 +259,11 @@ export class MemoryStore {
           pool.map((m) => m.content),
           Math.min(topK, pool.length),
         );
-        scored = hits.map((h) => ({ ...pool[h.index]!, rerankScore: h.score }));
-      } catch {
+        // score 設成 reranker 分 → 下游排序/淘汰（evictOverBudget）用的是最終相關性，不是被覆蓋掉
+        // 的融合粗排（devin P0：否則 reranker 排第一但融合分低的記憶會被優先踢掉）。rerankScore 留透明度。
+        scored = hits.map((h) => ({ ...pool[h.index]!, score: h.score, rerankScore: h.score }));
+      } catch (e) {
+        console.warn("[recall] reranker fallback to fusion:", (e as Error).message);
         scored = scored.slice(0, topK);
       }
     } else {

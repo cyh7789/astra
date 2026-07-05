@@ -35,6 +35,9 @@ describe("recencyScore", () => {
   it("clamps future timestamps to 1", () => {
     expect(recencyScore(new Date("2026-07-04T00:00:00Z"), now)).toBe(1);
   });
+  it("invalid date → 0，不回 NaN 汙染融合（devin P0）", () => {
+    expect(recencyScore(new Date("not-a-date"), now)).toBe(0);
+  });
 });
 
 describe("minMaxNormalize", () => {
@@ -47,6 +50,10 @@ describe("minMaxNormalize", () => {
   it("handles empty", () => {
     expect(minMaxNormalize([])).toEqual([]);
   });
+  it("非有限值歸零，不讓單一 NaN 塌陷整條訊號（devin P0）", () => {
+    // 舊版：Math.min(...[1,NaN,3])=NaN → 全 NaN → sort 亂序。新版：NaN→0 後正常歸一
+    expect(minMaxNormalize([2, NaN, 6])).toEqual([2 / 6, 0, 1]);
+  });
 });
 
 describe("fuse", () => {
@@ -57,5 +64,13 @@ describe("fuse", () => {
     );
     expect(fused[0]).toBeCloseTo(0.4 + 0 + 0.15, 5);
     expect(fused[1]).toBeCloseTo(0 + 0.3 + 0.15, 5);
+  });
+  it("權重和≠1 時正規化 → score 不隨總和膨脹（devin P2）", () => {
+    // {1,1,1} 若不正規化 score 會 ×3，window.cool 門檻失真；正規化後 = 三訊號平均
+    const fused = fuse(
+      { vector: [1], bm25: [0.5], recency: [0] },
+      { vector: 1, bm25: 1, recency: 1 },
+    );
+    expect(fused[0]).toBeCloseTo((1 + 0.5 + 0) / 3, 5);
   });
 });
