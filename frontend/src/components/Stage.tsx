@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useLiveStt } from "../hooks/useLiveStt.js";
 import { useRecorder } from "../hooks/useRecorder.js";
 import { createAsciiField, type AsciiField } from "../stage/ascii-field.js";
 import type { DeviceRow } from "./DeviceBoard.js";
@@ -40,38 +41,45 @@ export function Stage({
   const [showSources, setShowSources] = useState(false);
   const spokenId = useRef(0);
 
-  // 語音偵測（server 端 STT）：push-to-talk 轉錄填輸入列（可修正）；driving 免持直接送出。
+  // 語音偵測：driving 免持走 Live API 即時轉錄（逐字浮現、額度獨立），relay 掛了自動退段落式；
+  // push-to-talk（home/office）維持段落式（轉錄填輸入列可修正）。
   // 小夏還在回的時候講的話先存著，回完自動送 — 免持對話不掉句。
   const handsFree = context === "driving";
   const busyRef = useRef(busy);
   busyRef.current = busy;
   const pendingRef = useRef("");
-  const speech = useRecorder(
-    useCallback(
-      (text: string) => {
-        if (!handsFree) return setDraft(text);
-        if (busyRef.current) pendingRef.current = text;
-        else onSend(text);
-      },
-      [handsFree, onSend],
-    ),
+  const onVoiceText = useCallback(
+    (text: string) => {
+      if (!handsFree) return setDraft(text);
+      if (busyRef.current) pendingRef.current = text;
+      else onSend(text);
+    },
+    [handsFree, onSend],
   );
+  const liveStt = useLiveStt(onVoiceText);
+  const speech = useRecorder(onVoiceText);
+  const useLive = handsFree && liveStt.supported && !liveStt.failed;
   useEffect(() => {
     if (busy || !pendingRef.current) return;
     const queued = pendingRef.current;
     pendingRef.current = "";
     onSend(queued);
   }, [busy, onSend]);
+  const listening = useLive ? liveStt.listening : speech.listening;
   useEffect(() => {
-    fieldRef.current?.setListening(speech.listening); // 聆聽預浮現
-  }, [speech.listening]);
+    fieldRef.current?.setListening(listening); // 聆聽預浮現
+  }, [listening]);
   useEffect(() => {
     // driving = 免持預設開（「真的在跟車講話」）；離開場景收麥克風
-    if (handsFree && speech.supported) speech.start({ handsFree: true });
-    else speech.stop();
-    // speech 物件每 render 更新，依 handsFree 切換即可
+    if (handsFree && useLive) liveStt.start();
+    else if (handsFree && speech.supported) speech.start({ handsFree: true });
+    else {
+      liveStt.stop();
+      speech.stop();
+    }
+    // hook 物件每 render 更新，依模式切換即可
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [handsFree, speech.supported]);
+  }, [handsFree, useLive, speech.supported]);
 
   useEffect(() => {
     const field = createAsciiField(canvasRef.current!, (p) => setSubSide(p.subSide));
@@ -97,11 +105,14 @@ export function Stage({
     u.onstart = () => {
       started = true;
       field.setSpeaking(true);
-      speech.setSuppressed(true); // 免持別把喇叭裡自己的聲音聽成使用者
+      // 免持別把喇叭裡自己的聲音聽成使用者
+      speech.setSuppressed(true);
+      liveStt.setSuppressed(true);
     };
     u.onend = u.onerror = () => {
       field.setSpeaking(false);
       speech.setSuppressed(false);
+      liveStt.setSuppressed(false);
     };
     u.onboundary = () => field.punch(1); // 每個詞界 = 一記真打點
     speechSynthesis.speak(u);
@@ -194,15 +205,16 @@ export function Stage({
           )}
         </div>
 
-        {handsFree && speech.listening && (
+        {handsFree && listening && (
           <div className="absolute bottom-[76px] left-[6%] text-[10px] tracking-[.1em] text-[#58503f]">
             <span className="text-[#f2c184]">●</span> hands-free listening
+            {useLive && <span className="ml-2 opacity-70">live</span>}
           </div>
         )}
 
         <div className="absolute bottom-6 left-[6%] flex w-[min(560px,52vw)] gap-2">
           <input
-            value={draft}
+            value={useLive && liveStt.interim ? liveStt.interim : draft}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && submit()}
             placeholder={
@@ -210,7 +222,7 @@ export function Stage({
                 ? "…"
                 : speech.processing
                   ? "transcribing…"
-                  : speech.listening
+                  : listening
                     ? "listening…"
                     : "Talk to ASTRA…"
             }
@@ -218,10 +230,15 @@ export function Stage({
           />
           {speech.supported && (
             <button
-              onClick={() => (speech.listening ? speech.stop() : speech.start())}
-              title={speech.listening ? "stop listening" : "push to talk"}
+              onClick={() => {
+                if (listening) {
+                  liveStt.stop();
+                  speech.stop();
+                } else speech.start();
+              }}
+              title={listening ? "stop listening" : "push to talk"}
               className={`pointer-events-auto grid h-[38px] w-[38px] place-items-center rounded-full border transition-colors ${
-                speech.listening
+                listening
                   ? "border-[#f2c184] bg-[#f2c18426] text-[#f2c184]"
                   : "border-[#58503f] text-[#8a7d6b] hover:border-[#f2c184] hover:text-[#f2c184]"
               }`}

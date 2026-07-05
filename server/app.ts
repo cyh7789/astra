@@ -1,5 +1,7 @@
+import fastifyWebsocket from "@fastify/websocket";
 import Fastify, { type FastifyInstance } from "fastify";
 import type pg from "pg";
+import { openLiveStt } from "../src/live-stt.js";
 import type { LlmClient } from "../src/llm.js";
 import { DEMO_USER, seed } from "../src/seed.js";
 import { ChatSession } from "../src/session.js";
@@ -62,6 +64,31 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   app.addContentTypeParser(/^audio\//, { parseAs: "buffer" }, (_req, body, done) =>
     done(null, body),
   );
+
+  // Live API 即時 STT relay：前端送 16kHz PCM（binary）→ Google Live → 逐字轉錄推回。
+  // 金鑰留在 server；額度與 generateContent 分開（7/5 spike 實證）。段落式 /api/stt 是 fallback。
+  void app.register(fastifyWebsocket);
+  void app.register(async (scope) => {
+    scope.get("/ws/stt", { websocket: true }, (socket) => {
+      if (process.env.STT_DEBUG) console.log("[ws/stt] client connected");
+      let live: ReturnType<typeof openLiveStt>;
+      try {
+        live = openLiveStt({
+          onInterim: (text) => socket.send(JSON.stringify({ interim: text })),
+          onFinal: (text) => socket.send(JSON.stringify({ final: text })),
+          onClose: (reason) => socket.close(1011, reason),
+        });
+      } catch {
+        socket.close(1011, "stt not configured");
+        return;
+      }
+      socket.on("message", (data: Buffer, isBinary: boolean) => {
+        if (isBinary) live.sendPcm(data);
+        else if (data.toString() === '{"end":true}') live.endAudio();
+      });
+      socket.on("close", () => live.close());
+    });
+  });
 
   /** server 端 STT：收一段音訊、回轉錄文字。與對話回合無關，不進 turnQueue。 */
   app.post("/api/stt", async (req, reply) => {
