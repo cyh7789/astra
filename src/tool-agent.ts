@@ -176,7 +176,7 @@ export class ToolAgent {
         continue;
       }
 
-      const result = tool.execute(action.args);
+      const result = await tool.execute(action.args);
       toolCalls.push({ tool: tool.name, args: action.args, result });
       transcript.push(`（你）：${JSON.stringify(action)}`, `TOOL_RESULT: ${JSON.stringify(result)}`);
 

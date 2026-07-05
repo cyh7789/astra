@@ -75,13 +75,26 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   });
 
   app.post("/api/chat", async (req, reply) => {
-    const { message } = (req.body ?? {}) as { message?: unknown };
+    const { message, location, disabled } = (req.body ?? {}) as {
+      message?: unknown;
+      location?: unknown;
+      disabled?: unknown;
+    };
     if (typeof message !== "string" || message.trim().length === 0) {
       return reply.code(400).send({ error: "message must be a non-empty string" });
     }
+    // 瀏覽器 GPS（拿得到權限才有）— 查詢類工具打真 API 用；沒有就全走 mock。
+    // disabled = 資料源面板手動關掉的來源（雙軌：不給權限/手動關都照跑，只是誠實退 mock）
+    const loc = location as { lat?: unknown; lng?: unknown } | undefined;
+    const env = {
+      ...(typeof loc?.lat === "number" && typeof loc?.lng === "number"
+        ? { location: { lat: loc.lat, lng: loc.lng } }
+        : {}),
+      ...(Array.isArray(disabled) ? { disabled: disabled.filter((d) => typeof d === "string") } : {}),
+    };
     return enqueue(async () => {
       const s = await ensureSession();
-      const turn = await s.send(message);
+      const turn = await s.send(message, new Date(), env);
       deviceState = reduceDeviceState(deviceState, turn.toolCalls);
       return {
         reply: turn.reply,

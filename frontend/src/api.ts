@@ -60,7 +60,15 @@ async function post<T>(url: string, body: unknown): Promise<T> {
 }
 
 export const api = {
-  chat: (message: string) => post<ChatResponse>("/api/chat", { message }),
+  chat: (
+    message: string,
+    opts?: { location?: { lat: number; lng: number } | null; disabled?: string[] },
+  ) =>
+    post<ChatResponse>("/api/chat", {
+      message,
+      location: opts?.location ?? undefined,
+      disabled: opts?.disabled,
+    }),
   scene: (context: string) => post<SceneResponse>("/api/scene", { context }),
   reset: () => post<{ ok: boolean }>("/api/reset", {}),
   state: async (): Promise<StateResponse> => {

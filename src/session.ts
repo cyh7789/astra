@@ -8,7 +8,7 @@ import type { WindowEntry, WindowVia } from "./memory-window.js";
 import { MemoryWindow } from "./memory-window.js";
 import type { Memory, MemoryStore, ScoredMemory } from "./store.js";
 import { parseAction } from "./tool-agent.js";
-import type { DeviceTool } from "./tools.js";
+import type { DeviceTool, ToolEnv } from "./tools.js";
 import { TOOLS, toolsForContext } from "./tools.js";
 
 /** 多輪對話 session（設計文件 §4.4）：三層記憶穿梭的載體。
@@ -70,6 +70,8 @@ interface LoopCtx {
   unlockedThisTurn: Set<string>;
   message: string;
   now: Date;
+  /** 瀏覽器 GPS 等真實環境 — 查詢類工具打真 API 用 */
+  env: ToolEnv;
   floorNudged: boolean;
   calls: number;
   /** 同輪已嘗試的 tool+args 簽名 — 重複呼叫地板（VoxGuard RepetitionGuard 移植） */
@@ -199,7 +201,7 @@ export class ChatSession {
     }
   }
 
-  async send(message: string, now = new Date()): Promise<SessionTurnResult> {
+  async send(message: string, now = new Date(), env: ToolEnv = {}): Promise<SessionTurnResult> {
     this.turn++;
     this.window.beginTurn(this.turn, now);
     const event = EVENT_RE.exec(message);
@@ -273,6 +275,7 @@ export class ChatSession {
       unlockedThisTurn,
       message,
       now,
+      env,
       floorNudged: false, // 行為地板整輪只 nudge 一次（使用者可能是拒絕，不無限逼）
       calls: 0,
       attempted: new Set<string>(),
@@ -473,7 +476,7 @@ export class ChatSession {
         );
         continue;
       }
-      const result = tool.execute(action.args);
+      const result = await tool.execute(action.args, ctx.env);
       // 敏感確認單次有效：執行一次即重新上鎖，下次呼叫重走確認（7/6 edge case 衝刺抓到的語意漏洞）
       if (tool.sensitive) this.confirmedTools.delete(tool.name);
       toolCalls.push({ tool: tool.name, args: action.args, result });

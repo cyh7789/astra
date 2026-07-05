@@ -17,6 +17,8 @@ export function Stage({
   busy,
   announcement,
   deviceRows,
+  mapsUrl,
+  sourcesPanel,
   onSend,
   onSwitchScene,
   onInspector,
@@ -25,6 +27,8 @@ export function Stage({
   busy: boolean;
   announcement: Announcement | null;
   deviceRows: DeviceRow[];
+  mapsUrl: string | null;
+  sourcesPanel: React.ReactNode;
   onSend: (text: string) => void;
   onSwitchScene: (scene: string) => void;
   onInspector: () => void;
@@ -33,6 +37,7 @@ export function Stage({
   const fieldRef = useRef<AsciiField | null>(null);
   const [subSide, setSubSide] = useState<"left" | "right">("left");
   const [draft, setDraft] = useState("");
+  const [showSources, setShowSources] = useState(false);
   const spokenId = useRef(0);
 
   // 語音偵測（server 端 STT）：push-to-talk 轉錄填輸入列（可修正）；driving 免持直接送出。
@@ -140,6 +145,12 @@ export function Stage({
                 {s === "driving" ? "car" : s}
               </button>
             ))}
+            <button
+              onClick={() => setShowSources((v) => !v)}
+              className={`uppercase ${showSources ? "text-[#f2c184]" : "opacity-45 hover:opacity-80"}`}
+            >
+              data
+            </button>
           </nav>
         </header>
 
@@ -159,12 +170,28 @@ export function Stage({
           </div>
         )}
 
+        {showSources && (
+          <div className="pointer-events-auto absolute right-8 top-14 w-[280px] border border-[#58503f] bg-[#0a0806ee] p-3">
+            {sourcesPanel}
+          </div>
+        )}
+
         <div className="absolute bottom-[70px] left-[6%] flex max-w-[60vw] flex-wrap gap-4 text-[11px] tracking-[.05em] text-[#58503f]">
           {deviceRows.map((r, i) => (
             <span key={i} className="text-[#f2c184]" style={{ textShadow: "0 0 10px #f2c18466" }}>
               [{r.label} {r.value}]
             </span>
           ))}
+          {mapsUrl && (
+            <a
+              href={mapsUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="pointer-events-auto text-[#9cc8e8] underline decoration-dotted underline-offset-4 hover:text-[#f2c184]"
+            >
+              Open in Google Maps ↗
+            </a>
+          )}
         </div>
 
         {handsFree && speech.listening && (

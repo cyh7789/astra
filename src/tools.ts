@@ -9,6 +9,29 @@
  */
 
 import { demoMeetingTime } from "./demo-time.js";
+import { fetchRoute, fetchWeather, searchPoi, webSearch } from "./live-data.js";
+
+/** live 優先、任何失敗退 mock（demo 不能死在公開 API 上）。回傳帶 source 標示資料來源。 */
+async function liveOr(
+  sourceKey: "weather" | "poi" | "nav",
+  env: ToolEnv | undefined,
+  live: (loc: { lat: number; lng: number }) => Promise<Record<string, unknown>>,
+  mock: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  if (!env?.location || env.disabled?.includes(sourceKey)) return { ...mock, source: "mock" };
+  try {
+    return await live(env.location);
+  } catch {
+    return { ...mock, source: "mock" };
+  }
+}
+
+/** 執行環境：瀏覽器 Geolocation 傳上來的真實位置等。查詢類工具用它打真 API（脫節感是 demo 殺手）。 */
+export interface ToolEnv {
+  location?: { lat: number; lng: number };
+  /** 資料源面板手動關掉的來源（"weather"|"poi"|"nav"）— 即使有 GPS 也走 mock */
+  disabled?: string[];
+}
 
 export interface DeviceTool {
   name: string;
@@ -19,7 +42,10 @@ export interface DeviceTool {
   /** 只讀（QUERY）工具：查到 ≠ 能做 — prompt 標注用（VoxGuard QUERY/ACTION 分離） */
   readonly?: boolean;
   validate(args: Record<string, unknown>): string | null;
-  execute(args: Record<string, unknown>): Record<string, unknown>;
+  execute(
+    args: Record<string, unknown>,
+    env?: ToolEnv,
+  ): Record<string, unknown> | Promise<Record<string, unknown>>;
 }
 
 function intIn(v: unknown, min: number, max: number): boolean {
@@ -38,7 +64,24 @@ const driving: DeviceTool[] = [
       typeof a.destination === "string" && a.destination.length > 0
         ? null
         : "destination must be a non-empty string",
-    execute: (a) => ({ ok: true, device: "nav", destination: a.destination, eta_minutes: 24 }),
+    execute: (a, env) =>
+      liveOr(
+        "nav",
+        env,
+        async (loc) => {
+          const r = await fetchRoute(a.destination as string, loc.lat, loc.lng);
+          return {
+            ok: true,
+            source: "live",
+            device: "nav",
+            destination: a.destination,
+            eta_minutes: r.eta_minutes,
+            distance_km: r.distance_km,
+            maps_url: r.maps_url, // 前端渲染「Open in Google Maps」卡片 — 點下去是真導航
+          };
+        },
+        { ok: true, device: "nav", destination: a.destination, eta_minutes: 24 },
+      ),
   },
   {
     name: "get_routes",
@@ -51,14 +94,38 @@ const driving: DeviceTool[] = [
       typeof a.destination === "string" && a.destination.length > 0
         ? null
         : "destination must be a non-empty string",
-    execute: (a) => ({
-      ok: true,
-      destination: a.destination,
-      routes: [
-        { id: "r1", label: "fastest", eta_minutes: 24, distance_km: 18, toll: true },
-        { id: "r2", label: "toll-free", eta_minutes: 31, distance_km: 16, toll: false },
-      ],
-    }),
+    execute: (a, env) =>
+      liveOr(
+        "nav",
+        env,
+        async (loc) => {
+          const r = await fetchRoute(a.destination as string, loc.lat, loc.lng);
+          // OSRM demo server 只回單一最佳路線 — live 模式一條、mock 模式才有雙路線選擇
+          return {
+            ok: true,
+            source: "live",
+            destination: a.destination,
+            routes: [
+              {
+                id: "r1",
+                label: "fastest",
+                eta_minutes: r.eta_minutes,
+                distance_km: r.distance_km,
+                toll: false,
+              },
+            ],
+            maps_url: r.maps_url,
+          };
+        },
+        {
+          ok: true,
+          destination: a.destination,
+          routes: [
+            { id: "r1", label: "fastest", eta_minutes: 24, distance_km: 18, toll: true },
+            { id: "r2", label: "toll-free", eta_minutes: 31, distance_km: 16, toll: false },
+          ],
+        },
+      ),
   },
   {
     name: "search_poi",
@@ -68,13 +135,14 @@ const driving: DeviceTool[] = [
     argsSpec: '{"query": "search term", "along_route": true|false}',
     validate: (a) =>
       typeof a.query === "string" && a.query.length > 0 ? null : "query must be a non-empty string",
-    execute: (a) => ({
-      ok: true,
-      results: [
-        { name: `${a.query}（建國路）`, detour_minutes: 3 },
-        { name: `${a.query}（民族路）`, detour_minutes: 7 },
-      ],
-    }),
+    execute: (a, env) =>
+      liveOr("poi", env, (loc) => searchPoi(a.query as string, loc.lat, loc.lng), {
+        ok: true,
+        results: [
+          { name: `${a.query}（建國路）`, detour_minutes: 3 },
+          { name: `${a.query}（民族路）`, detour_minutes: 7 },
+        ],
+      }),
   },
   {
     name: "set_climate",
@@ -138,13 +206,14 @@ const driving: DeviceTool[] = [
     description: "Check the weather (destination or current location)",
     argsSpec: '{"location": "place (optional = current location)"}',
     validate: () => null,
-    execute: (a) => ({
-      ok: true,
-      location: a.location ?? "當前位置",
-      condition: "午後雷陣雨",
-      temperature_c: 31,
-      rain_probability: 70,
-    }),
+    execute: (a, env) =>
+      liveOr("weather", env, (loc) => fetchWeather(loc.lat, loc.lng), {
+        ok: true,
+        location: a.location ?? "當前位置",
+        condition: "午後雷陣雨",
+        temperature_c: 31,
+        rain_probability: 70,
+      }),
   },
 ];
 
@@ -297,6 +366,26 @@ const office: DeviceTool[] = [
 // ── 跨場景（context: "any"）──────────────────────────────
 
 const universal: DeviceTool[] = [
+  {
+    name: "web_search",
+    context: "any",
+    readonly: true,
+    description: "Search the web for current information (news, events, facts, opening hours)",
+    argsSpec: '{"query": "what to search for"}',
+    validate: (a) =>
+      typeof a.query === "string" && a.query.length > 0 ? null : "query must be a non-empty string",
+    // 不綁 GPS（搜尋不需要位置）；失敗誠實回不可用 — 假搜尋結果比沒有更糟
+    execute: async (a, env) => {
+      if (env?.disabled?.includes("search")) {
+        return { ok: false, source: "mock", error: "web search disabled in data sources panel" };
+      }
+      try {
+        return await webSearch(a.query as string);
+      } catch {
+        return { ok: false, source: "mock", error: "web search temporarily unavailable" };
+      }
+    },
+  },
   {
     name: "play_music",
     context: "any",

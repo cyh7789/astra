@@ -108,6 +108,22 @@ export function Conversation({
                   </div>
                 )}
                 <AstraBubble>{m.text}</AstraBubble>
+                {(() => {
+                  // live 導航才有 maps_url — 點下去是真的 Google Maps 路線
+                  const mu = m.toolCalls
+                    ?.map((t) => t.result?.maps_url)
+                    .find((u) => typeof u === "string");
+                  return mu ? (
+                    <a
+                      href={mu as string}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="mt-1.5 inline-block rounded-full border border-[var(--accent-dim)] px-3 py-1 text-[11px] text-[var(--accent)] transition-colors hover:border-[var(--accent)]"
+                    >
+                      Open in Google Maps ↗
+                    </a>
+                  ) : null;
+                })()}
               </div>
             </div>
           ),
