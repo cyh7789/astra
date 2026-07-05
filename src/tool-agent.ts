@@ -27,12 +27,25 @@ export function parseAction(raw: string): AgentAction | null {
   const stripped = raw.replace(/```json\s*|```\s*/g, "").trim();
   const start = stripped.indexOf("{");
   if (start < 0) return null;
-  // 掃到對應的閉括號（處理巢狀）
+  // 掃到對應的閉括號（處理巢狀）— 必須忽略字串字面值裡的 {}，否則 reply text 含 } 會提前歸零
+  // 切出不合法 JSON（devin P2：{"text":"設定 }"} 被截斷）。
   let depth = 0;
   let end = -1;
+  let inString = false;
+  let escaped = false;
   for (let i = start; i < stripped.length; i++) {
-    if (stripped[i] === "{") depth++;
-    else if (stripped[i] === "}") {
+    const ch = stripped[i];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (ch === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (ch === '"') inString = !inString;
+    else if (!inString && ch === "{") depth++;
+    else if (!inString && ch === "}") {
       depth--;
       if (depth === 0) {
         end = i;

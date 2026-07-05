@@ -78,6 +78,28 @@ interface LoopCtx {
   calls: number;
   /** 同輪已嘗試的 tool+args 簽名 — 重複呼叫地板（VoxGuard RepetitionGuard 移植） */
   attempted: Set<string>;
+  /** 外部查詢類工具的同輪次數 — 語意等價變體繞過簽名時的硬上限 */
+  externalCalls: Map<string, number>;
+}
+
+/** 打真外部 API、會燒額度的查詢類工具 — 同輪呼叫次數受 MAX_EXTERNAL_CALLS_PER_TURN 硬限 */
+const EXTERNAL_QUERY_TOOLS = new Set([
+  "web_search",
+  "search_poi",
+  "get_routes",
+  "start_navigation",
+  "get_weather",
+]);
+const MAX_EXTERNAL_CALLS_PER_TURN = 3;
+
+/** 簽名正規化：key 排序 + 字串值 trim — 讓「新聞」與「新聞 」視為同一次嘗試（防微調繞過） */
+function normalizeArgsSig(args: Record<string, unknown>): string {
+  const norm: Record<string, unknown> = {};
+  for (const k of Object.keys(args).sort()) {
+    const v = args[k];
+    norm[k] = typeof v === "string" ? v.trim() : v;
+  }
+  return JSON.stringify(norm);
 }
 
 export class ChatSession {
@@ -287,26 +309,40 @@ export class ChatSession {
       floorNudged: false, // 行為地板整輪只 nudge 一次（使用者可能是拒絕，不無限逼）
       calls: 0,
       attempted: new Set<string>(),
+      externalCalls: new Map<string, number>(),
     };
 
     // 動態路由 v1（#25）：本地模型收斂失敗 → 強模型「接手同一輪」——
     // 看得到已有的 TOOL_RESULT（不重複副作用），working 附升級註記。
-    let replyText = await this.driveLoop(this.llm, ctx);
+    let replyText: string | null;
     let escalated = false;
-    if (replyText === null && this.strongLlm) {
-      escalated = true;
-      working.push(
-        "SYSTEM_GUARD: escalated — the previous model could not complete this turn. Review the conversation and TOOL_RESULT lines above (those actions are already done; do not repeat them) and finish the turn correctly.",
-      );
-      replyText = await this.driveLoop(this.strongLlm, ctx);
+    try {
+      replyText = await this.driveLoop(this.llm, ctx);
+      if (replyText === null && this.strongLlm) {
+        escalated = true;
+        // 升級重置地板：強模型是新推理主體，敏感 nudge 給它重新一次機會，否則弱模型花掉的
+        // floorNudged 會讓強模型的敏感謊報裸奔（devin P0）。attempted 保留（防重放副作用）。
+        ctx.floorNudged = false;
+        working.push(
+          "SYSTEM_GUARD: escalated — the previous model could not complete this turn. Review the conversation and TOOL_RESULT lines above (those actions are already done; do not repeat them) and finish the turn correctly.",
+        );
+        replyText = await this.driveLoop(this.strongLlm, ctx);
+      }
+    } finally {
+      // 敏感解鎖只在本輪有效：使用者確認後模型當輪執行（執行即上鎖）；若模型沒執行（使用者其實
+      // 是拒絕）或 driveLoop 中途拋例外，解鎖都不得殘留 — 否則之後任何一輪免確認直接執行（devin P0-1）
+      this.confirmedTools.clear();
     }
 
-    // 敏感解鎖只在本輪有效：使用者確認後模型當輪執行（執行即上鎖 :489）；若模型沒執行
-    // （使用者其實是拒絕），解鎖不得殘留 — 否則之後任何一輪模型都能免確認直接執行（devin P0-1）
-    this.confirmedTools.clear();
-
-    const finalReply =
-      replyText ?? "(Interrupted: too many consecutive actions — please tell me again what you need.)";
+    // 中斷（兩模型都沒收斂）時，把本輪已執行的工具列進 reply — 否則使用者盲目重試，下輪
+    // attempted 已重置 → 副作用工具（打電話/119/鎖門）再執行一遍（devin P1）。
+    let finalReply = replyText;
+    if (finalReply === null) {
+      const done = toolCalls.map((c) => c.tool);
+      finalReply = done.length
+        ? `(Interrupted before finishing. Already done this turn: ${done.join(", ")}. Tell me what you still need — don't repeat those.)`
+        : "(Interrupted: too many consecutive actions — please tell me again what you need.)";
+    }
     this.transcript.push(`User: ${message}`, `(You): ${finalReply}`);
     await this.compactTranscript();
     await this.finishTurn(pendingToolHits, admitted, now);
@@ -342,9 +378,17 @@ export class ChatSession {
         continue;
       }
       if (action.action === "reply") {
-        // 行為地板（CAR-bench 經驗：prompt 是上限、harness 是下限）— 攔 reply 不是攔對話
+        // 行為地板（CAR-bench 經驗：prompt 是上限、harness 是下限）— 攔 reply 不是攔對話。
+        // 人命地板每個 reply 都檢查、不受 nudge-once 節流（devin P0：跟敏感地板共用 bool 會讓
+        // 命案路徑在敏感 nudge 花掉後 / 升級 strongLlm 後裸奔）。自然終止：打了 119 即通過。
+        const hazard = hazardFloorNudge(message, toolCalls);
+        if (hazard) {
+          working.push(`(You): ${JSON.stringify(action)}`, `SYSTEM_GUARD: ${hazard}`);
+          continue;
+        }
+        // 敏感地板 nudge-once（使用者可能是拒絕，不無限逼）
         if (!ctx.floorNudged) {
-          const nudge = safetyFloorNudge(message, toolCalls, ctx.unlockedThisTurn);
+          const nudge = sensitiveFloorNudge(toolCalls, ctx.unlockedThisTurn);
           if (nudge) {
             ctx.floorNudged = true;
             working.push(`(You): ${JSON.stringify(action)}`, `SYSTEM_GUARD: ${nudge}`);
@@ -354,8 +398,26 @@ export class ChatSession {
         return action.text;
       }
 
-      // 重複呼叫地板：同輪同工具同參數第二次 → 攔下換路（小模型鬼打牆的確定性剎車）
-      const sig = `${action.tool}:${JSON.stringify(action.args)}`;
+      // 外部查詢類工具同輪次數硬上限：正規化簽名擋不住語意等價的變體（「新聞」→「新聞。」），
+      // 這些直打真 API 燒額度（devin P1）。給定次數後即拒，不靠模型自律。
+      if (EXTERNAL_QUERY_TOOLS.has(action.tool)) {
+        const n = (ctx.externalCalls.get(action.tool) ?? 0) + 1;
+        ctx.externalCalls.set(action.tool, n);
+        if (n > MAX_EXTERNAL_CALLS_PER_TURN) {
+          working.push(
+            `(You): ${JSON.stringify(action)}`,
+            `TOOL_RESULT: ${JSON.stringify({
+              ok: false,
+              error: `${action.tool} call limit reached this turn — use what you have or reply.`,
+            })}`,
+          );
+          continue;
+        }
+      }
+
+      // 重複呼叫地板：同輪同工具同參數第二次 → 攔下換路（小模型鬼打牆的確定性剎車）。
+      // 簽名正規化（key 排序 + 字串 trim）擋微調空白繞過（devin P1）。
+      const sig = `${action.tool}:${normalizeArgsSig(action.args)}`;
       if (ctx.attempted.has(sig)) {
         working.push(
           `(You): ${JSON.stringify(action)}`,
@@ -493,7 +555,18 @@ export class ChatSession {
         );
         continue;
       }
-      const result = await tool.execute(action.args, ctx.env);
+      // execute 拋例外不能冒泡：會跳過 confirmedTools.clear() 讓解鎖殘留，也讓整輪 crash
+      // （devin P1：async live 工具的 bug / 異常 env 都可能拋）。轉成 TOOL_RESULT error 讓模型換路。
+      let result: Record<string, unknown>;
+      try {
+        result = await tool.execute(action.args, ctx.env);
+      } catch (err) {
+        working.push(
+          `(You): ${JSON.stringify(action)}`,
+          `TOOL_RESULT: ${JSON.stringify({ ok: false, error: `tool execution failed: ${(err as Error).message}` })}`,
+        );
+        continue;
+      }
       // 敏感確認單次有效：執行一次即重新上鎖，下次呼叫重走確認（7/6 edge case 衝刺抓到的語意漏洞）
       if (tool.sensitive) this.confirmedTools.delete(tool.name);
       ctx.onToolCall?.(tool.name, action.args, result);
@@ -648,19 +721,27 @@ export class ChatSession {
 }
 
 /** 確定性行為地板：回 null = 放行 reply；回字串 = 攔下 reply、把訊息餵回模型再跑一步。 */
-export function safetyFloorNudge(
+/** 人命地板：危險事件 + 無回應 → emergency_call 不可缺席。每個 reply 都檢查、不受 nudge-once
+ *  節流（devin P0：跟敏感地板共用一個 floorNudged bool 會讓命案路徑在敏感 nudge 花掉後裸奔）。
+ *  自然終止：emergency_call 一旦被呼叫即通過，不會無限循環。 */
+export function hazardFloorNudge(
   message: string,
   toolCalls: SessionTurnResult["toolCalls"],
-  unlockedThisTurn: Set<string>,
 ): string | null {
-  // 地板 1：危險事件 + 無回應 → emergency_call 不可缺席（人命優先）
   const hazardNoResponse =
     /USER_NO_RESPONSE/.test(message) &&
     /(airbag_deployed|collision|smoke_detected|gas_leak)/.test(message);
   if (hazardNoResponse && !toolCalls.some((t) => t.tool === "emergency_call")) {
     return "Hazard event with USER_NO_RESPONSE: emergency_call is required NOW (life first, no confirmation needed) — call it, unless the user has clearly responded since.";
   }
-  // 地板 2：已解鎖的敏感操作不得「說了沒做」
+  return null;
+}
+
+/** 敏感地板：已解鎖的敏感操作不得「說了沒做」。nudge-once（使用者可能是拒絕，不無限逼）。 */
+export function sensitiveFloorNudge(
+  toolCalls: SessionTurnResult["toolCalls"],
+  unlockedThisTurn: Set<string>,
+): string | null {
   const unexecuted = [...unlockedThisTurn].filter((t) => !toolCalls.some((c) => c.tool === t));
   if (unexecuted.length > 0) {
     return `Confirmed sensitive actions not yet executed: ${unexecuted.join(", ")}. If the user approved, call them now; if the user declined, reply WITHOUT claiming they were done.`;

@@ -191,6 +191,36 @@ describe("ChatSession 持久化與跨終端接續", () => {
     expect(payloads.some((p) => p.includes("SYSTEM_GUARD:"))).toBe(true);
   });
 
+  it("人命地板不被敏感 nudge 花掉：危險事件 + 開窗後 reply 仍逼出 emergency_call（devin P0）", async () => {
+    // 模型在危險事件下先做無關動作（開窗）再想 reply — 舊版 floorNudged 被這個 reply 花掉後，
+    // 後續 reply 就跳過 hazard 地板，119 永不觸發。人命地板必須每個 reply 都攔到打了為止。
+    const queue = [
+      '{"action":"tool_call","tool":"set_window","args":{"side":"all","position":100}}',
+      '{"action":"reply","text":"我幫你開窗通風了"}', // reply #1 — hazard 地板攔
+      '{"action":"reply","text":"你還好嗎？"}', // reply #2 — 舊版這裡就裸奔放行
+      '{"action":"tool_call","tool":"emergency_call","args":{"service":"119","reason":"gas leak, unresponsive"}}',
+      '{"action":"reply","text":"已通報 119"}',
+    ];
+    const llm: LlmClient = { async complete() { return queue.shift()!; } };
+    const s = await ChatSession.open(store, llm, DEMO_USER, "home", NOW, { extract: false });
+    const t = await s.send(
+      'HOME_EVENT: {"type":"gas_leak","room":"kitchen"}\nUSER_NO_RESPONSE',
+      NOW,
+    );
+    expect(t.toolCalls.some((c) => c.tool === "emergency_call")).toBe(true);
+  });
+
+  it("邊界：reply text 內含大括號不讓 parseAction 截斷（devin P2）", async () => {
+    const llm: LlmClient = {
+      async complete() {
+        return '{"action":"reply","text":"已設定 {mode: cool}，完成"}';
+      },
+    };
+    const s = await ChatSession.open(store, llm, DEMO_USER, "driving", NOW, { extract: false });
+    const t = await s.send("設定冷氣", NOW);
+    expect(t.reply).toBe("已設定 {mode: cool}，完成"); // } 在字串內，不被當成 JSON 結尾
+  });
+
   it("邊界：事件 payload JSON 爛掉不崩潰，正常走完該輪", async () => {
     const llm: LlmClient = {
       async complete() {
