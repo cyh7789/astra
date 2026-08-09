@@ -452,6 +452,7 @@ export class ChatSession {
             ? action.args.context
             : this.context;
         let saved: Memory;
+        const privacyLevel = memoryType === "semantic" ? "cross-context" as const : "private" as const;
         try {
           saved = await this.store.remember({
             userId: this.userId,
@@ -459,6 +460,7 @@ export class ChatSession {
             memoryType,
             content,
             importance: typeof action.args.importance === "number" ? action.args.importance : 0.7,
+            privacyLevel,
             expiresAt:
               typeof action.args.expiresInHours === "number"
                 ? new Date(now.getTime() + action.args.expiresInHours * 3_600_000)

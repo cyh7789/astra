@@ -1,5 +1,7 @@
+import { randomUUID } from "node:crypto";
+import fastifyCookie from "@fastify/cookie";
 import fastifyWebsocket from "@fastify/websocket";
-import Fastify, { type FastifyInstance } from "fastify";
+import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
 import type pg from "pg";
 import { openLiveStt } from "../src/live-stt.js";
 import type { LlmClient } from "../src/llm.js";
@@ -24,27 +26,56 @@ export interface AppDeps {
   transcribe?: Transcriber;
 }
 
+interface UserSlot {
+  userId: string;
+  session: ChatSession | null;
+  deviceState: ReturnType<typeof initialDeviceState>;
+  turnQueue: Promise<unknown>;
+}
+
+const COOKIE_NAME = "astra_uid";
+const MAX_SLOTS = 20;
+
 export function buildApp(deps: AppDeps): FastifyInstance {
   const app = Fastify();
-  let session: ChatSession | null = null;
-  let deviceState = initialDeviceState();
-  /** 同一個 ChatSession 不能並發 send（transcript 順序會亂）— 回合一律排隊 */
-  let turnQueue: Promise<unknown> = Promise.resolve();
+  void app.register(fastifyCookie);
 
-  function enqueue<T>(work: () => Promise<T>): Promise<T> {
-    const result = turnQueue.then(work);
-    turnQueue = result.catch(() => {}); // 失敗的回合不卡死佇列
+  const slots = new Map<string, UserSlot>();
+
+  function getSlot(req: FastifyRequest, reply: { setCookie?: Function }): UserSlot {
+    let uid = (req.cookies as Record<string, string>)?.[COOKIE_NAME];
+    if (!uid || !slots.has(uid)) {
+      uid = randomUUID();
+      if (slots.size >= MAX_SLOTS) {
+        const oldest = slots.keys().next().value!;
+        slots.delete(oldest);
+      }
+      slots.set(uid, {
+        userId: uid,
+        session: null,
+        deviceState: initialDeviceState(),
+        turnQueue: Promise.resolve(),
+      });
+    }
+    if (reply.setCookie) {
+      (reply as any).setCookie(COOKIE_NAME, uid, { path: "/", httpOnly: true, sameSite: "lax", maxAge: 86400 });
+    }
+    return slots.get(uid)!;
+  }
+
+  function enqueue<T>(slot: UserSlot, work: () => Promise<T>): Promise<T> {
+    const result = slot.turnQueue.then(work);
+    slot.turnQueue = result.catch(() => {});
     return result;
   }
 
-  /** resume 優先：session 態在 CockroachDB，server 重啟、換終端都接得回來。 */
-  async function ensureSession(context = "home"): Promise<ChatSession> {
-    if (session) return session;
+  async function ensureSession(slot: UserSlot, context = "home"): Promise<ChatSession> {
+    if (slot.session) return slot.session;
     const opts = { strongLlm: deps.strongLlm };
-    session =
-      (await ChatSession.resume(deps.store, deps.llm, DEMO_USER, new Date(), opts)) ??
-      (await ChatSession.open(deps.store, deps.llm, DEMO_USER, context, new Date(), opts));
-    return session;
+    slot.session =
+      (await ChatSession.resume(deps.store, deps.llm, slot.userId, new Date(), opts)) ??
+      (await ChatSession.open(deps.store, deps.llm, slot.userId, context, new Date(), opts));
+    return slot.session;
   }
 
   /** Inspector 用的窗快照（score 由高到低） */
@@ -114,6 +145,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   });
 
   app.post("/api/chat", async (req, reply) => {
+    const slot = getSlot(req, reply);
     const { message, location, disabled } = (req.body ?? {}) as {
       message?: unknown;
       location?: unknown;
@@ -122,8 +154,6 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     if (typeof message !== "string" || message.trim().length === 0) {
       return reply.code(400).send({ error: "message must be a non-empty string" });
     }
-    // 瀏覽器 GPS（拿得到權限才有）— 查詢類工具打真 API 用；沒有就全走 mock。
-    // disabled = 資料源面板手動關掉的來源（雙軌：不給權限/手動關都照跑，只是誠實退 mock）
     const loc = location as { lat?: unknown; lng?: unknown } | undefined;
     const env = {
       ...(typeof loc?.lat === "number" && typeof loc?.lng === "number"
@@ -131,19 +161,18 @@ export function buildApp(deps: AppDeps): FastifyInstance {
         : {}),
       ...(Array.isArray(disabled) ? { disabled: disabled.filter((d) => typeof d === "string") } : {}),
     };
-    // ?stream=1：SSE — 每次工具執行當下推 tool 事件（過程可見，不然長回合看起來像卡死），
-    // 最後推 done 帶完整結果。非 stream 維持一發 JSON（測試/curl 相容）。
     const streaming = (req.query as { stream?: string }).stream === "1";
     if (streaming) {
+      reply.hijack();
       reply.raw.writeHead(200, {
         "Content-Type": "text/event-stream",
-        "Cache-Control": "no-cache",
+        "Cache-Control": "no-cache, no-transform",
         Connection: "keep-alive",
-        "X-Accel-Buffering": "no", // 反向代理（nginx/ALB）別 buffer — 不然「即時上屏」變一次性倒出
+        "X-Accel-Buffering": "no",
       });
-      // client 斷線（關分頁）後別再往壞掉的 stream 寫 — EPIPE 會炸掉整回合
+      reply.raw.flushHeaders();
       let clientGone = false;
-      req.raw.on("close", () => {
+      reply.raw.on("close", () => {
         clientGone = true;
       });
       const push = (event: string, data: unknown) => {
@@ -155,12 +184,12 @@ export function buildApp(deps: AppDeps): FastifyInstance {
         }
       };
       try {
-        const result = await enqueue(async () => {
-          const s = await ensureSession();
+        const result = await enqueue(slot, async () => {
+          const s = await ensureSession(slot);
           const turn = await s.send(message, new Date(), env, (tool, args, r) =>
             push("tool", { tool, args, result: r }),
           );
-          deviceState = reduceDeviceState(deviceState, turn.toolCalls);
+          slot.deviceState = reduceDeviceState(slot.deviceState, turn.toolCalls);
           return {
             reply: turn.reply,
             toolCalls: turn.toolCalls,
@@ -169,7 +198,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
             turns: turn.turns,
             context: s.context,
             window: windowSnapshot(s),
-            deviceState,
+            deviceState: slot.deviceState,
           };
         });
         push("done", result);
@@ -179,10 +208,10 @@ export function buildApp(deps: AppDeps): FastifyInstance {
       reply.raw.end();
       return reply;
     }
-    return enqueue(async () => {
-      const s = await ensureSession();
+    return enqueue(slot, async () => {
+      const s = await ensureSession(slot);
       const turn = await s.send(message, new Date(), env);
-      deviceState = reduceDeviceState(deviceState, turn.toolCalls);
+      slot.deviceState = reduceDeviceState(slot.deviceState, turn.toolCalls);
       return {
         reply: turn.reply,
         toolCalls: turn.toolCalls,
@@ -191,18 +220,19 @@ export function buildApp(deps: AppDeps): FastifyInstance {
         turns: turn.turns,
         context: s.context,
         window: windowSnapshot(s),
-        deviceState,
+        deviceState: slot.deviceState,
       };
     });
   });
 
   app.post("/api/scene", async (req, reply) => {
+    const slot = getSlot(req, reply);
     const { context } = (req.body ?? {}) as { context?: unknown };
     if (typeof context !== "string" || !SCENES.includes(context)) {
       return reply.code(400).send({ error: `context must be one of ${SCENES.join("/")}` });
     }
-    return enqueue(async () => {
-      const s = await ensureSession(context);
+    return enqueue(slot, async () => {
+      const s = await ensureSession(slot, context);
       let surfaced: Array<{ id: string; content: string }> = [];
       let evicted: Array<{ id: string; content: string }> = [];
       if (s.context !== context) {
@@ -210,15 +240,14 @@ export function buildApp(deps: AppDeps): FastifyInstance {
         surfaced = r.surfaced.map((m) => ({ id: m.id, content: m.content }));
         evicted = r.evicted.map((e) => ({ id: e.memory.id, content: e.memory.content }));
       }
-      return { context: s.context, surfaced, evicted, window: windowSnapshot(s), deviceState };
+      return { context: s.context, surfaced, evicted, window: windowSnapshot(s), deviceState: slot.deviceState };
     });
   });
 
-  /** 全快照：分頁載入與跨終端 resume 用。對話態直接讀 DB（每輪都有 persist）—
-   *  這個端點本身就是「記憶住 CockroachDB」的活證據。 */
-  app.get("/api/state", async () => {
-    const s = await ensureSession();
-    const persisted = await deps.store.loadSessionState(DEMO_USER);
+  app.get("/api/state", async (req, reply) => {
+    const slot = getSlot(req, reply);
+    const s = await ensureSession(slot);
+    const persisted = await deps.store.loadSessionState(slot.userId);
     return {
       context: s.context,
       turn: persisted?.turn ?? 0,
@@ -226,24 +255,23 @@ export function buildApp(deps: AppDeps): FastifyInstance {
       digest: persisted?.digest ?? "",
       openThreads: persisted?.openThreads ?? [],
       window: windowSnapshot(s),
-      deviceState,
+      deviceState: slot.deviceState,
     };
   });
 
-  /** 重置 demo（評審玩壞了自己救）：清掉 demo user 的所有資料重新 seed。 */
-  app.post("/api/reset", async () => {
-    return enqueue(async () => {
-      await deps.pool.query("DELETE FROM session_state WHERE user_id = $1", [DEMO_USER]);
+  app.post("/api/reset", async (req, reply) => {
+    const slot = getSlot(req, reply);
+    return enqueue(slot, async () => {
+      await deps.pool.query("DELETE FROM session_state WHERE user_id = $1", [slot.userId]);
       await deps.pool.query(
         `DELETE FROM memory_links
           WHERE source_id IN (SELECT id FROM memories WHERE user_id = $1)
              OR target_id IN (SELECT id FROM memories WHERE user_id = $1)`,
-        [DEMO_USER],
+        [slot.userId],
       );
-      await deps.pool.query("DELETE FROM memories WHERE user_id = $1", [DEMO_USER]);
-      await seed(deps.store);
-      session = null;
-      deviceState = initialDeviceState();
+      await deps.pool.query("DELETE FROM memories WHERE user_id = $1", [slot.userId]);
+      slot.session = null;
+      slot.deviceState = initialDeviceState();
       return { ok: true };
     });
   });
