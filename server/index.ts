@@ -42,5 +42,5 @@ if (existsSync(dist)) {
 }
 
 const port = Number(process.env.PORT ?? 8787);
-await app.listen({ port });
+await app.listen({ port, host: "0.0.0.0" });
 console.log(`ASTRA demo server on http://localhost:${port}`);
