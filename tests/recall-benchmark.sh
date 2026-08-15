@@ -33,13 +33,16 @@ api chat '{"message":"I prefer my meeting notes in bullet points, never paragrap
 echo "--- recalling from HOME ---"
 api scene '{"context":"home"}' >/dev/null; sleep 3
 
-# 題目|召回關鍵字(正則)|來源關鍵字(正則)|來源場景
+# 題目|召回關鍵字(正則)×2|來源關鍵字(正則)×N
+# 判準紀律：關鍵字必須是「記憶存在才會出現」的字。題目自帶的詞（fuel、car）與 reset 重新
+# seed 的示範記憶（其中有一條加油提醒）都能讓模型不召回也答得像對的，所以不列入召回正則；
+# 來源正則只收完整場景片語，裸的 car / office / driving 一律不算。
 CASES=(
-"Is there anything about my car I should handle?|tire|28 ?PSI|in the car|while driv|during your driv|on the road|driving|car"
-"Do I have any personal events this weekend?|birthday|rose|in the car|while driv|during your driv|driving|car"
-"Are there any work deadlines I should know about?|Friday|Alpha|at the office|in the office|at work|while.*office|office"
-"How do I prefer my meeting notes formatted?|bullet|at the office|in the office|at work|while.*office|office"
-"Is the car low on fuel?|gas|fuel|30 ?km|in the car|while driv|during your driv|driving|car"
+"Is there anything about my car I should handle?|tire|28 ?PSI|in the car|while.*driv|during your driv|on the drive"
+"Do I have any personal events this weekend?|birthday|rose|in the car|while.*driv|during your driv|on the drive"
+"Are there any work deadlines I should know about?|Friday|Alpha|at the office|in the office|at work|while.*office"
+"How do I prefer my meeting notes formatted?|bullet|paragraph|at the office|in the office|at work|while.*office"
+"Is the car low on fuel?|30 ?km|almost empty|in the car|while.*driv|during your driv|on the drive"
 )
 
 n=0; hit=0; src=0
