@@ -67,6 +67,14 @@ export function parseAction(raw: string): AgentAction | null {
     ) {
       return { action: "tool_call", tool: obj.tool, args: obj.args as Record<string, unknown> };
     }
+    // action 缺席時改由形狀推斷：部分開源模型（實測 Bedrock Gemma 4 31B）只吐
+    // {"tool":...,"args":{...}}，外層由 harness 補齊比要求模型改口可靠。
+    if (obj.action === undefined) {
+      if (typeof obj.tool === "string" && obj.args !== null && typeof obj.args === "object") {
+        return { action: "tool_call", tool: obj.tool, args: obj.args as Record<string, unknown> };
+      }
+      if (typeof obj.text === "string") return { action: "reply", text: obj.text };
+    }
     return null;
   } catch {
     return null;
