@@ -35,25 +35,31 @@ api scene '{"context":"home"}' >/dev/null; sleep 3
 
 # 題目|召回關鍵字(正則)|來源關鍵字(正則)|來源場景
 CASES=(
-"Is there anything about my car I should handle?|tire|28 PSI|car|driv|driving"
-"Do I have any personal events this weekend?|birthday|rose|car|driv|driving"
-"Are there any work deadlines I should know about?|Friday|Alpha|office|work|office"
-"How do I prefer my meeting notes formatted?|bullet|office|work|office"
-"Is the car low on fuel?|gas|fuel|30 km|car|driv|driving"
+"Is there anything about my car I should handle?|tire|28 ?PSI|in the car|while driv|during your driv|on the road|driving|car"
+"Do I have any personal events this weekend?|birthday|rose|in the car|while driv|during your driv|driving|car"
+"Are there any work deadlines I should know about?|Friday|Alpha|at the office|in the office|at work|while.*office|office"
+"How do I prefer my meeting notes formatted?|bullet|at the office|in the office|at work|while.*office|office"
+"Is the car low on fuel?|gas|fuel|30 ?km|in the car|while driv|during your driv|driving|car"
 )
 
 n=0; hit=0; src=0
 for c in "${CASES[@]}"; do
-  IFS='|' read -r q k1 k2 s1 s2 scene <<< "$c"
+  IFS='|' read -r -a F <<< "$c"
+  q="${F[0]}"
+  # 欄位：題目 | 召回正則... | 來源正則... | 場景（最後一欄）
+  scene="${F[$(( ${#F[@]} - 1 ))]}"
+  # 召回關鍵字放前段，來源片語一律含 "in the car / at the office" 這類完整說法
+  recall_re="$(printf '%s|' "${F[@]:1:2}" | sed 's/|$//')"
+  source_re="$(printf '%s|' "${F[@]:3:$((${#F[@]}-4))}" | sed 's/|$//')"
   n=$((n+1))
   r="$(api chat "{\"message\":\"$q\"}" | rep)"; sleep 4
 
-  h=0; echo "$r" | grep -qiE "$k1|$k2" && { h=1; hit=$((hit+1)); }
-  s=0; echo "$r" | grep -qiE "$s1|$s2"  && { s=1; src=$((src+1)); }
+  h=0; echo "$r" | grep -qiE "$recall_re" && { h=1; hit=$((hit+1)); }
+  s=0; echo "$r" | grep -qiE "$source_re" && { s=1; src=$((src+1)); }
 
   printf "[%d] recall=%s source=%s  %s\n" "$n" \
     "$([ $h = 1 ] && echo ✓ || echo ✗)" "$([ $s = 1 ] && echo ✓ || echo ✗)" "$q"
-  [ $h = 0 ] && echo "     → ${r:0:150}"
+  { [ $h = 0 ] || [ $s = 0 ]; } && echo "     → ${r:0:170}"
   printf '{"case":%d,"scene":"%s","recall":%d,"source":%d,"q":"%s"}\n' \
     "$n" "$scene" "$h" "$s" "$q" >> "$R"
 done
