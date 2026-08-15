@@ -370,6 +370,9 @@ export class ChatSession {
         [...working, `(Current time: ${formatLocalTime(now)})`].join("\n"),
       );
       const action = parseAction(raw);
+      if (process.env.ASTRA_DEBUG_LOOP === "1") {
+        console.error(`[loop ${i}] RAW: ${JSON.stringify(raw).slice(0, 500)}`);
+      }
 
       if (!action) {
         working.push(
