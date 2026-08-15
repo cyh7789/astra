@@ -32,6 +32,19 @@ describe("parseAction 容錯", () => {
       parseAction('好的，我來執行：\n```json\n{"action":"tool_call","tool":"set_light","args":{"room":"all","on":false}}\n```'),
     ).toMatchObject({ action: "tool_call", tool: "set_light" });
   });
+  it("省略 action 外層時由形狀推斷（Bedrock Gemma 4 實測輸出）", () => {
+    expect(
+      parseAction('{"tool":"save_memory","args":{"content":"tire pressure is low","memoryType":"episodic"}}'),
+    ).toEqual({
+      action: "tool_call",
+      tool: "save_memory",
+      args: { content: "tire pressure is low", memoryType: "episodic" },
+    });
+    expect(parseAction('{"text":"好的，已經幫你記下來了"}')).toEqual({
+      action: "reply",
+      text: "好的，已經幫你記下來了",
+    });
+  });
   it("垃圾輸入回 null（純文字/沒有大括號/爛 JSON）", () => {
     expect(parseAction("我不會輸出 JSON")).toBeNull();
     expect(parseAction('{"action":"tool_call","tool":123}')).toBeNull();
