@@ -45,6 +45,22 @@ describe("parseAction 容錯", () => {
       text: "好的，已經幫你記下來了",
     });
   });
+  it("工具名寫在 action 欄位、args 攤平在頂層（Bedrock Gemma 4 實測輸出）", () => {
+    expect(
+      parseAction('{"action":"save_memory","args":{"content":"tire is low","type":"episodic"}}'),
+    ).toEqual({
+      action: "tool_call",
+      tool: "save_memory",
+      args: { content: "tire is low", type: "episodic" },
+    });
+    expect(
+      parseAction('{"action":"save_memory","content":"tire is low","type":"episodic","importance":0.8}'),
+    ).toEqual({
+      action: "tool_call",
+      tool: "save_memory",
+      args: { content: "tire is low", type: "episodic", importance: 0.8 },
+    });
+  });
   it("垃圾輸入回 null（純文字/沒有大括號/爛 JSON）", () => {
     expect(parseAction("我不會輸出 JSON")).toBeNull();
     expect(parseAction('{"action":"tool_call","tool":123}')).toBeNull();
