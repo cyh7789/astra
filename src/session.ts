@@ -757,6 +757,19 @@ const VIA_LABEL: Partial<Record<WindowVia, string>> = {
   event: "[event] ",
 };
 
+/** 場景代碼 → 說得出口的來源片語。模型照抄標記時（實測會）也要讀得通，
+ *  而不是把 [handoff] 這種內部字樣吐給使用者。 */
+const SCENE_PHRASE: Record<string, string> = {
+  driving: "in the car",
+  office: "at the office",
+  home: "at home",
+};
+
+function handoffLabel(sourceContext: string | null | undefined): string {
+  const phrase = sourceContext ? SCENE_PHRASE[sourceContext] : undefined;
+  return phrase ? `[said ${phrase}] ` : "[said in another scene] ";
+}
+
 /** Prompt 分層排列（§4.10 KV cache 對齊）：靜態（persona/規則/工具）在前、
  *  慢變（記憶窗）殿後、每輪資料（時間戳）放 user 尾端 — prefix 失效點越後面越好。 */
 export function buildSessionPrompt(
@@ -779,7 +792,9 @@ export function buildSessionPrompt(
       ? "(No relevant memories loaded — for personal-fact questions, search with recall_memory first)"
       : memories
           .map((m) => {
-            const label = VIA_LABEL[viaById.get(m.id) ?? "passive"] ?? "";
+            const via = viaById.get(m.id) ?? "passive";
+            const label =
+              via === "handoff" ? handoffLabel(m.sourceContext) : (VIA_LABEL[via] ?? "");
             const lines = [`- ${label}${m.content}`];
             for (const a of m.annotations) lines.push(`  ⚠ ${a}`);
             return lines.join("\n");
@@ -805,7 +820,8 @@ export function buildSessionPrompt(
     "",
     "## Memory rules",
     "Personal facts about the user must come only from the memory section; when a memory carries an annotation (stale / conflicting / from another scene), reflect it in your reply.",
-    "Memories tagged [handoff] are things the user mentioned in another scene that matter now — bring them up naturally and proactively in this turn.",
+    "Memories tagged [said in the car / at the office / at home] came from a different scene and matter now: bring them up proactively, and say where they came from in your own words (for example: you mentioned in the car that...).",
+    "Never print a bracketed tag such as [said in the car], [pinned] or [event] in your reply. Those are internal annotations; rewrite them as ordinary sentences.",
     "Memories tagged [event] are background fetched for the current event — use them to brief the user.",
     "Lines at the top of the conversation like (Earlier summary: …) and (Open: …) are condensed earlier conversation: use them to stay continuous, and follow up on open items at a fitting moment.",
     "",

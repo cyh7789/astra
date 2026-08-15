@@ -276,5 +276,28 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     });
   });
 
+  app.post<{ Body: { text?: string; voice?: string } }>("/api/tts", async (req, reply) => {
+    const { text, voice } = req.body ?? {};
+    if (typeof text !== "string" || text.trim().length === 0) {
+      return reply.code(400).send({ error: "text must be a non-empty string" });
+    }
+    const v = voice || "en-US-AvaMultilingualNeural";
+    const { execFile } = await import("node:child_process");
+    const { promisify } = await import("node:util");
+    const { readFile, unlink } = await import("node:fs/promises");
+    const exec = promisify(execFile);
+    const tmp = `/tmp/astra-tts-${randomUUID()}.mp3`;
+    const bin = process.env.EDGE_TTS_BIN || `${process.env.HOME}/.local/bin/edge-tts`;
+    try {
+      await exec(bin, ["--voice", v, "--text", text.trim(), "--write-media", tmp], { timeout: 15_000 });
+      const buf = await readFile(tmp);
+      reply.type("audio/mpeg").send(buf);
+    } catch (e: any) {
+      reply.code(500).send({ error: e.message ?? "tts failed" });
+    } finally {
+      unlink(tmp).catch(() => {});
+    }
+  });
+
   return app;
 }

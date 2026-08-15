@@ -98,7 +98,6 @@ export function Stage({
     const field = createAsciiField(canvasRef.current!, (p) => setSubSide(p.subSide));
     fieldRef.current = field;
     return () => {
-      speechSynthesis.cancel();
       field.destroy();
     };
   }, []);
@@ -109,30 +108,45 @@ export function Stage({
     const field = fieldRef.current;
     if (!field) return;
     field.maybeRelocate(); // 完全溶解後才換構圖，講到一半不瞬移
-    speechSynthesis.cancel();
     const timers: ReturnType<typeof setTimeout>[] = [];
-    let started = false;
-    const u = new SpeechSynthesisUtterance(announcement.text);
-    u.lang = /[一-鿿]/.test(announcement.text) ? "zh-TW" : "en-US";
-    u.rate = 1.05;
-    u.onstart = () => {
-      started = true;
-      field.setSpeaking(true);
-      // 免持別把喇叭裡自己的聲音聽成使用者
-      speech.setSuppressed(true);
-      liveStt.setSuppressed(true);
-    };
-    u.onend = u.onerror = () => {
-      field.setSpeaking(false);
-      speech.setSuppressed(false);
-      liveStt.setSuppressed(false);
-    };
-    u.onboundary = () => field.punch(1); // 每個詞界 = 一記真打點
-    speechSynthesis.speak(u);
-    // 保底：環境沒有 TTS voice 時 speechSynthesis 靜默失敗 — 用估算時長驅動浮現，字幕不啞場
-    timers.push(
-      setTimeout(() => {
-        if (started) return;
+    const audioRef = { current: null as HTMLAudioElement | null };
+
+    // Edge TTS via server
+    const voice = /[一-鿿]/.test(announcement.text) ? "zh-TW-HsiaoChenNeural" : "en-US-AvaMultilingualNeural";
+    fetch("/api/tts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: announcement.text, voice }),
+    })
+      .then((r) => (r.ok ? r.blob() : Promise.reject(new Error("tts failed"))))
+      .then((blob) => {
+        const url = URL.createObjectURL(blob);
+        const audio = new Audio(url);
+        audioRef.current = audio;
+        audio.onplay = () => {
+          field.setSpeaking(true);
+          speech.setSuppressed(true);
+          liveStt.setSuppressed(true);
+        };
+        audio.onended = audio.onerror = () => {
+          field.setSpeaking(false);
+          speech.setSuppressed(false);
+          liveStt.setSuppressed(false);
+          URL.revokeObjectURL(url);
+        };
+        // word-boundary punch approximation (every ~300ms)
+        const punchInterval = setInterval(() => field.punch(1), 300);
+        audio.onended = () => {
+          clearInterval(punchInterval);
+          field.setSpeaking(false);
+          speech.setSuppressed(false);
+          liveStt.setSuppressed(false);
+          URL.revokeObjectURL(url);
+        };
+        audio.play().catch(() => {});
+      })
+      .catch(() => {
+        // fallback: estimate duration for subtitle timing
         field.setSpeaking(true);
         timers.push(
           setTimeout(
@@ -140,8 +154,7 @@ export function Stage({
             Math.min(12_000, 1_800 + announcement.text.length * 140),
           ),
         );
-      }, 600),
-    );
+      });
     return () => timers.forEach(clearTimeout);
   }, [announcement]);
 

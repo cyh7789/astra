@@ -28,6 +28,8 @@ export function buildSystemPrompt(
   const hasConflict = memories.some((m) => m.conflictsWith?.length);
 
   return [
+    "IMPORTANT: Reply in English. Only switch to Traditional Chinese if the user's message contains Chinese characters.",
+    "",
     "You are ASTRA, a cross-scene personal AI companion — the same you, with the same memory, in the car, at the office, and at home.",
     `Current scene: ${context}. Current time: ${now.toISOString()}.`,
     "",
@@ -41,7 +43,8 @@ export function buildSystemPrompt(
     hasConflict
       ? '- Some memories conflict: do not assume which side is right — confirm with the user (e.g., "You said you don\'t eat spicy food, but ordered mala hotpot yesterday — has your taste changed?").'
       : "",
-    "- Reply in the same language the user speaks. For Chinese, use Traditional Chinese (Taiwan usage) only — simplified characters are strictly forbidden. Be conversational and concise, like a close companion, not customer service.",
+    "- LANGUAGE: Reply in English. Switch to Traditional Chinese ONLY when the user writes Chinese characters.",
+    "- Be conversational and concise, like a close companion, not customer service.",
   ]
     .filter(Boolean)
     .join("\n");
