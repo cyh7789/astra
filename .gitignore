@@ -1,17 +1,6 @@
 node_modules/
 .astra-data/
+eval-logs/
 *.log
 .env
-
-# 影片製作素材與成品不進 repo（成品在 YouTube）
-demo-video/
 .DS_Store
-
-# 內部戰略與交接文件，不公開（評審會讀這個 repo）
-HANDOFF*.md
-astra-calibration.md
-astra-correction-*.md
-astra-route-baseline.md
-devpost-draft.md
-devpost-form.md
-video-script.md

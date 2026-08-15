@@ -1,146 +1,170 @@
-# ASTRA — Adaptive Spatial-Temporal Recall Agent
+# ASTRA
 
-跨場景記憶型 AI 夥伴：車上 → 辦公室 → 家，同一份記憶、不同介面。
-CockroachDB × AWS Hackathon 參賽作品。
+One AI companion with one memory, across the car, the office, and home. Say something on the drive home and the assistant at home already knows it, and tells you where it heard it.
 
-核心問題：「記住」很簡單，**在對的時間想起對的事**才難。ASTRA 從幾萬筆記憶裡精準撈出當下需要的 3-5 筆。
+**Live demo: https://astra.hcytlog.com** (no signup, each visitor gets an isolated memory space)
+**Demo video: https://youtu.be/Ot-E5jVTD9g**
 
-## 檢索管線
+Built for the CockroachDB × AWS "Build with Agentic Memory" hackathon.
+
+Remembering is easy. Recalling the right thing at the right moment, in a scene the memory was not created in, is the hard part. ASTRA treats a person, not an app, as the unit of memory.
+
+## What makes it different
+
+We compared six agent-memory systems (Letta, Mem0, Zep, LangMem, A-MEM, CarMem). All six attach memory to a single agent or a single application. In that survey, none treats cross-context recall with source attribution as a first-class primitive. That gap is the product.
+
+Measured on the live deployment: each benchmark run stores 5 memories across the driving and office scenes, switches to a third scene, and asks 5 recall questions. Across 3 runs, 14/15 answers recalled the right memory with detail, and 15/15 named the scene it came from. The one miss was a recall failure rather than a fabrication: the agent said it could not find the memory instead of inventing one.
+
+```bash
+bash tests/recall-benchmark.sh https://astra.hcytlog.com
+```
+
+## Memory model
+
+| memory_type | What it holds | Example |
+|---|---|---|
+| `episodic` | Events and interactions | "Said last night that we need to refuel first today" |
+| `semantic` | Extracted facts and preferences | "Manager Wang prefers quarterly billing" |
+| `procedural` | Rules and routines | "Meeting notes in bullet points, never paragraphs" |
+
+Every memory carries `privacy_level`: `private` surfaces only in the scene that created it (an office quote never shows up at home), `cross-context` follows you between scenes (a fact stated in the car is known at home), `public` is unrestricted. Time-bounded memories use `expires_at` and disappear on their own. `forget` is a soft delete via `deleted_at`.
+
+When a memory crosses scenes, the prompt labels it with the scene it came from (`[said in the car]`) so the model states the provenance in its own words rather than guessing or staying silent.
+
+## Retrieval pipeline
 
 ```
-使用者輸入
-  → [1] 場景偵測（driving / office / home）        （Phase 3）
-  → [2] SQL 範圍過濾（user + context + 隱私 + 時效）  ┐ 一條 hybrid query
-  → [3] 向量搜尋（cosine，CockroachDB 向量索引）      ┘ 進 CockroachDB
-  → [4] BM25 關鍵字補強（人名/地名精確匹配，應用層）
-  → [5] 三訊號融合排序（vector 0.4 / bm25 0.3 / recency 0.3）
-  → [6] LLM Reranker 精排                          （Phase 4）
-  → [7] 注入 context window                        （Phase 4）
-  → [8] Agent 回應 + Guard Chain                    （Phase 3/4）
+user input
+  → scene detection (driving / office / home)
+  → SQL scope filter (user + context + privacy + expiry)   ┐ one hybrid query,
+  → vector search (cosine, CockroachDB vector index)        ┘ one database
+  → BM25 keyword pass (exact names, model numbers)
+  → three-signal fusion (vector 0.4 / bm25 0.3 / recency 0.3)
+  → optional LLM reranker
+  → guard chain annotation
+  → agent response
 ```
 
-Phase 1（本狀態）= 步驟 2-5 完整落地，含三場景端到端測試。
+## CockroachDB integration
 
-## 記憶模型
+- **Hybrid query.** Scope filtering (user, scene, privacy, expiry) and vector distance ordering happen in the same query against the same database. No Postgres-plus-vector-store split, so no two-phase commit between a row store and an index service.
+- **Vector index.** `CREATE VECTOR INDEX idx_mem_vec ON memories (user_id, embedding)`. Prefix-column filtered vector search is supported directly, `<=>` for cosine, no cluster setting required.
+- **Typed memory links.** `memory_links` holds contradiction and association edges, so conflict detection is a read-time rule over a write-time graph rather than a second LLM call.
+- **Cross-device session state.** `session_state` lives on the same cluster, so identity belongs to the database rather than the device. A thread started in the car resumes at home.
+- **ACID.** Memory writes and business logic share a transaction. Multi-region consistency is the database's job, not ours.
+- Note: CockroachDB `INT` is `INT8` and node-postgres returns it as a string by default. `src/db.ts` installs a type parser.
 
-| memory_type | 存什麼 | 例子 |
-|-------------|--------|------|
-| episodic | 事件與互動 | 「昨晚說今天要先去加油」 |
-| semantic | 萃取的事實/偏好 | 「王經理偏好季付」 |
-| procedural | Guard 規則/SOP | （Phase 3） |
+## AWS integration
 
-隱私模型：`privacy_level = private / cross-context / public`。private 記憶只在自己的場景出現（辦公室報價不會在家裡被撈出）；cross-context 記憶跨場景流動（車上說的話回家還記得）。時效性記憶用 `expires_at`（提醒過期自動消失）。`forget` 是 soft delete（`deleted_at`）。
+- **Bedrock** runs the reasoning layer (Gemma 4 31B via Mantle, `us-east-1`, same region as the cluster).
+- **EC2** serves the Fastify gateway behind Caddy and Cloudflare for HTTPS, which the browser requires before it will grant microphone access.
 
-## CockroachDB 整合
+## Guard chain
 
-- **Hybrid query**：SQL 過濾（user/場景/隱私/時效）+ 向量距離排序在同一條 query、同一顆 DB — 不用 Postgres + Pinecone 兩套系統做 2PC
-- **向量索引**：`CREATE VECTOR INDEX idx_mem_vec ON memories (user_id, embedding)`（v26.2 實測：前綴欄位過濾式向量搜尋直接支援、`<=>` cosine、免 cluster setting）
-- **ACID**：記憶寫入與業務邏輯同交易；跨區一致性（出差寫的記憶回家讀得到）是 CockroachDB 天生的
-- 注意：CockroachDB 的 INT 是 INT8，node-postgres 預設回字串 — `src/db.ts` 設了 type parser
+Recall results pass through a deterministic guard chain before reaching the agent. It annotates rather than intercepts, because privacy interception already happened in SQL. Safety signals stay visible to both the agent and the user.
 
-## Dev
+| Situation | Guard | Output |
+|---|---|---|
+| Cross-scene transparency | PrivacyGuard | "from the office scene" / "mentioned while in the car" |
+| Staleness | RecencyGuard | "21 days old, may be out of date" (episodic only; semantic facts are long-lived) |
+| Contradiction | ConflictGuard | "contradicts an earlier memory, confirm rather than assume" plus `conflictsWith` ids |
+
+Building edges is write-time intelligence. Reading edges is a read-time rule: zero LLM calls, fully deterministic, repeatable in tests. When `conflictsWith` is non-empty the agent asks instead of guessing.
+
+## Integration boundary
+
+The demo labels every data source as live, simulated, or mocked, in a Data Sources panel judges can open. Mocks are not filler: the interfaces are shaped after the real SDKs, so swapping an adapter is the only remaining work.
+
+| Source | Now | Real interface |
+|---|---|---|
+| Clock | **live**, real time (`ASTRA_TZ`, default Asia/Taipei) | — |
+| Weather | **live** with GPS, Open-Meteo | same |
+| Places | **live** with GPS, OSM Overpass | Google Places API |
+| Navigation | **live** with GPS, Nominatim + OSRM, opens in Google Maps | Android Auto / CarPlay SDK |
+| Web search | **live**, Gemini Google Search grounding | same |
+| Calendar | **sim**, events generated relative to the real clock | Google Calendar / CalDAV |
+| Home devices | **mock**, args match HomeKit accessory/characteristic vocabulary | homebridge / HAP-NodeJS / Matter |
+| Vehicle control | **mock**, shaped after vehicle domain interfaces | OEM SDK (no real car, so this cannot be live) |
+
+Dual-track by design: if GPS is denied, a public API fails, or the network drops, the demo keeps running by falling back to mock and saying so in the panel.
+
+## Run it locally
 
 ```bash
 brew install cockroachdb/tap/cockroach
-./scripts/dev-db.sh          # 啟動本地單節點 CockroachDB（insecure，僅 localhost）
+./scripts/dev-db.sh          # local single-node CockroachDB (insecure, localhost only)
 npm install
-npm run migrate              # 建 schema（建 astra DB + 跑 migrations/）
-npm run seed                 # 灌三場景 demo 記憶
-npm test                     # 28 tests（純函數單元 + DB 整合 + 三場景端到端）
+npm run migrate              # create schema
+npm run seed                 # load demo memories for three scenes
+npm test                     # ~110 tests: pure units, DB integration, end-to-end scenes
 ```
 
-## CockroachDB Cloud
+The default embedder is a deterministic fake (token overlap approximates similarity) so the test suite needs no external API. Set `EMBEDDER=voyage` with `VOYAGE_API_KEY` for real semantics. Switching embedders invalidates existing vectors, so re-seed after changing it.
 
-同一套程式碼直接切 Cloud（Basic cluster on AWS）：
+## Run against CockroachDB Cloud
 
 ```bash
 export ASTRA_DB_URL='postgresql://<user>:<pass>@<host>:26257/astra?sslmode=verify-full'
 npm run migrate && npm run seed
-npm run cli -- recall --context driving "今天行程怎麼安排？"
-# 測試套件也能整套對 Cloud 跑（測試庫建在 defaultdb 同 cluster）：
+npm run cli -- recall --context driving "what is on my schedule today?"
+
+# the whole suite can run against Cloud as well
 export ASTRA_TEST_BASE_URL='postgresql://<user>:<pass>@<host>:26257/defaultdb?sslmode=verify-full'
 npm test
 ```
 
-已驗證（2026-07-03，cluster v25.4 / AWS us-east-1）：33/33 tests 通過。Cloud schema 由 CockroachDB Cloud 官方 MCP Server 佈建（`create_database` / `create_table` 含 inline `VECTOR INDEX`），與本地 migration 001 一致。
-
-## Demo CLI
+## Run the demo server
 
 ```bash
-npm run cli -- recall --context driving "今天行程怎麼安排？"
-npm run cli -- recall --context office "上次跟王經理談的報價是多少？"
-npm run cli -- recall --context home "冰箱裡還有什麼？晚餐吃什麼好？"
+export ASTRA_DB_URL='...'      # CockroachDB Cloud
+export VOYAGE_API_KEY='...'    # embeddings
+export GEMINI_API_KEY='...'    # speech to text
+npm run demo                   # http://localhost:8080
 ```
 
-輸出帶三訊號分解（vec / bm25 / rec），檢索透明可解釋：
+## CLI
+
+```bash
+npm run cli -- recall --context driving "what is on my schedule today?"
+npm run cli -- recall --context office "what quote did we discuss with Manager Wang?"
+npm run cli -- recall --context home "what is in the fridge?"
+```
+
+Output carries the three-signal breakdown, so retrieval stays explainable:
 
 ```
-0.700  [episodic/office]  與王經理會議：報價 $45,000，季付方案
+0.700  [episodic/office]  Meeting with Manager Wang: quote $45,000, quarterly billing
        vec=1.00 bm25=1.00 rec=0.00
 ```
 
-已知展示面小瑕疵：候選集小的時候 min-max 歸一化會把最弱候選壓到 0.00（仍會回傳、排序正確）。Phase 4 進 reranker 時一併處理。
+## MCP server
 
-## Guard Chain（安全標注層）
-
-Recall 結果經過確定性 guard chain 後才交給 agent — **標注不攔截**（隱私攔截在 SQL 層），讓安全訊號對 agent 與使用者可見：
-
-| 情境 | Guard | 實際輸出 |
-|------|-------|---------|
-| 跨場景透明 | PrivacyGuard | `⚠ 來自 office 場景的記憶` / `⚠ 當時在 driving 場景提到` |
-| 過時警告 | RecencyGuard | `⚠ 21 天前的資訊，可能已過時`（episodic 限定，semantic 長期事實不標） |
-| 矛盾偵測 | ConflictGuard | `⚠ 與記憶「昨天晚餐點了麻辣鍋外送…」矛盾，建議確認而非假設` + `conflictsWith` ids |
-
-設計原則：**建邊是寫入時智能**（Phase 4 萃取器偵測矛盾寫 `memory_links`），**查邊是讀取時規則**（guard 零 LLM、完全確定性、可重複測試）。Agent 看到 `conflictsWith` 非空就「問而不是猜」。
-
-Hallucination / Capability guard 屬 agent 回應層，隨 Phase 4 agent 一起實作。
-
-## MCP Server
-
-ASTRA 記憶層透過 MCP 協定暴露，任何 MCP 相容 client 都能接：
+The memory layer is exposed over MCP, so any compatible client can use it:
 
 ```bash
-npm run mcp                              # stdio server
-# 或註冊給 Claude Code：
+npm run mcp
+# or register with Claude Code:
 claude mcp add astra-memory -- npx tsx /path/to/astra/src/mcp-server.ts
 ```
 
-| 工具 | 功能 |
-|------|------|
-| `remember` | 寫入記憶（episodic/semantic/procedural、隱私分級、時效） |
-| `recall` | 多訊號融合檢索（回傳含訊號分解，不含 embedding） |
-| `update_memory` | 更新記憶，改 content 自動重算 embedding |
-| `forget` | soft delete，之後 recall 不再回傳 |
+| Tool | Purpose |
+|---|---|
+| `remember` | Write a memory (type, privacy level, expiry) |
+| `recall` | Multi-signal retrieval, returns the score breakdown |
+| `update_memory` | Update a memory; changing content recomputes the embedding |
+| `forget` | Soft delete; later recalls skip it |
 
-使用者身分綁 `ASTRA_USER_ID` 環境變數（單使用者夥伴模型），不暴露在工具參數。錯誤走 MCP `isError` content，不炸 session。
+Identity binds to the `ASTRA_USER_ID` environment variable rather than a tool argument. Errors return MCP `isError` content instead of tearing down the session.
 
-Phase 1 用確定性 FakeEmbedder（token 重疊 ≈ 相似度）讓測試不依賴外部 API；真語意（「氣炸鍋」↔「晚餐」）等 Phase 4 換 Bedrock Titan Embeddings V2。
+## Scope and known gaps
 
-## Integration Boundary（資料源雙軌）
+Named honestly, because they are the next things we would build:
 
-Demo UI 的每個資料源老實標示 live / mock（頁面上的 DATA SOURCES 面板），mock 不是湊數 — 接口已定義、換 adapter 即上線：
+- **Idempotent memory writes.** A retried event can currently double-write a memory. A transaction ledger keyed on `(session, turn, call)` is the fix.
+- **Persisted approval state.** Pending confirmations for sensitive actions live in process memory, so a restart loses them.
+- **Least-privilege database role.** The demo connects with a broader-privileged account than production should use.
+- **A larger benchmark.** 15 queries over 3 runs is a starting point, not a claim about the general case. Adversarial cases we do not yet test: conflicting memories, expired items, and privacy-scoped items that must *not* surface.
 
-| 資料源 | 目前 | 真實接口 |
-|--------|------|---------|
-| 時鐘 | **live** — 真實時間（`ASTRA_TZ`，預設 Asia/Taipei） | — |
-| 天氣 | **live**（GPS）— Open-Meteo | 同左（production 可換付費源） |
-| 地點搜尋 | **live**(GPS) — OSM Overpass | Google Places API |
-| 導航路線 | **live**（GPS）— Nominatim + OSRM，附 Google Maps 直開連結 | 車機導航 SDK（Android Auto / CarPlay） |
-| Web 搜尋 | **live** — Gemini Google Search grounding | 同左 |
-| 行事曆 | **sim** — 事件相對真實時鐘生成 | Google Calendar / CalDAV |
-| 家電控制 | **mock** — args 已對齊 HomeKit accessory/characteristic 語彙 | homebridge / HAP-NodeJS / Matter |
-| 車身控制 | **mock** — 依車載 domain 介面設計 | 車廠 SDK（斷路：無真車不可能 live） |
+## License
 
-雙軌原則：GPS 權限拿不到、公開 API 掛掉、斷網 — demo 全部照跑（自動退 mock 並在面板誠實顯示），永遠不會死在台上。
-
-## Roadmap
-
-| Phase | 內容 |
-|-------|------|
-| 1 ✅ | 記憶核心：schema + 多訊號融合檢索 + 三場景測試 |
-| 2 ✅ | MCP server（remember / recall / update_memory / forget 工具） |
-| 3 ✅ | Guard Chain（Privacy/Recency/Conflict 確定性版 + 情境資料） |
-| 4 | Bedrock agent + LLM reranker + demo UI + 真 embeddings + 記憶萃取器 + Hallucination/Capability guard |
-| 5 | AWS 部署（Lambda pre-warming、ECS）+ CockroachDB Cloud |
-
-設計稿與實作計畫在 `docs/plans/`。
+MIT. See [LICENSE](LICENSE).
