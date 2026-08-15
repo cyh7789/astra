@@ -13,7 +13,7 @@ Remembering is easy. Recalling the right thing at the right moment, in a scene t
 
 We compared six agent-memory systems (Letta, Mem0, Zep, LangMem, A-MEM, CarMem). All six attach memory to a single agent or a single application. In that survey, none treats cross-context recall with source attribution as a first-class primitive. That gap is the product.
 
-Measured on the live deployment: each benchmark run stores 5 memories across the driving and office scenes, switches to a third scene, and asks 5 recall questions. Across 3 runs, 14/15 answers recalled the right memory with detail, and 15/15 named the scene it came from. The one miss was a recall failure rather than a fabrication: the agent said it could not find the memory instead of inventing one.
+Measured on the live deployment: each benchmark run stores 5 memories across the driving and office scenes, switches to a third scene, and asks 5 recall questions. Across 3 runs, 14/15 answers recalled the right memory with detail, and 13/15 named the scene it came from. No miss was a fabrication: the one recall miss surfaced a different real memory about the car, and the attribution misses recalled the right fact but skipped the scene label.
 
 ```bash
 bash tests/recall-benchmark.sh https://astra.hcytlog.com
