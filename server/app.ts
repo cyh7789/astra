@@ -261,8 +261,15 @@ export function buildApp(deps: AppDeps): FastifyInstance {
 
   app.post("/api/reset", async (req, reply) => {
     const slot = getSlot(req, reply);
+    // scope=conversation：只開新對話，記憶留著 — benchmark 要問的是記憶層答不答得出來，
+    // 同一串對話裡問等於讓模型照抄前面的發言（實測回答裡出現只在 transcript 存在的 "Alpha"）。
+    const { scope } = (req.body ?? {}) as { scope?: unknown };
     return enqueue(slot, async () => {
       await deps.pool.query("DELETE FROM session_state WHERE user_id = $1", [slot.userId]);
+      if (scope === "conversation") {
+        slot.session = null;
+        return { ok: true, scope: "conversation" };
+      }
       await deps.pool.query(
         `DELETE FROM memory_links
           WHERE source_id IN (SELECT id FROM memories WHERE user_id = $1)
