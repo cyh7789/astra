@@ -66,6 +66,15 @@ describe("parseExtraction", () => {
     expect(out[0]!.expiresAt!.getTime()).toBe(NOW.getTime() + 12 * 3_600_000);
   });
 
+  it("萃取的 semantic 事實帶 cross-context，episodic 留 private（與 save_memory 同一條規則）", () => {
+    const out = parseExtraction(
+      '[{"memoryType":"semantic","content":"偏好會議記錄用條列","context":"office"},{"memoryType":"episodic","content":"油快沒了剩 30 公里","context":"driving"}]',
+      USER,
+      NOW,
+    );
+    expect(out.map((m) => m.privacyLevel)).toEqual(["cross-context", "private"]);
+  });
+
   it("returns empty on invalid json or wrong shapes", () => {
     expect(parseExtraction("我不會回json", USER, NOW)).toEqual([]);
     expect(parseExtraction('[{"memoryType":"procedural","content":"x"}]', USER, NOW)).toEqual([]);

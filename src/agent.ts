@@ -3,7 +3,7 @@
  *  parseExtraction 是共用的記憶萃取器，被 ChatSession 引用，不屬於棄用範圍。 */
 import type { GuardedMemory } from "./guards.js";
 import type { LlmClient } from "./llm.js";
-import type { MemoryInput, MemoryStore, MemoryType } from "./store.js";
+import { defaultPrivacy, type MemoryInput, type MemoryStore, type MemoryType } from "./store.js";
 
 /** 對話 system prompt：記憶注入 + guard 標注的行為規則。
  *  Hallucination 防線 v0 = prompt 級（個人事實必須有記憶依據）；驗證型 guard 在 Phase 4 後段。 */
@@ -92,6 +92,7 @@ export function parseExtraction(
           : "any",
         memoryType: x.memoryType as MemoryType,
         content: x.content as string,
+        privacyLevel: defaultPrivacy(x.memoryType as MemoryType),
         importance: typeof x.importance === "number" ? x.importance : undefined,
         expiresAt:
           typeof x.expiresInHours === "number"

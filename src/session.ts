@@ -6,7 +6,7 @@ import { applyGuards, DEFAULT_GUARDS } from "./guards.js";
 import type { LlmClient } from "./llm.js";
 import type { WindowEntry, WindowVia } from "./memory-window.js";
 import { MemoryWindow } from "./memory-window.js";
-import type { Memory, MemoryStore, ScoredMemory } from "./store.js";
+import { defaultPrivacy, type Memory, type MemoryStore, type ScoredMemory } from "./store.js";
 import { parseAction } from "./tool-agent.js";
 import type { DeviceTool, ToolEnv } from "./tools.js";
 import { TOOLS, toolsForContext } from "./tools.js";
@@ -455,7 +455,7 @@ export class ChatSession {
             ? action.args.context
             : this.context;
         let saved: Memory;
-        const privacyLevel = memoryType === "semantic" ? "cross-context" as const : "private" as const;
+        const privacyLevel = defaultPrivacy(memoryType);
         try {
           saved = await this.store.remember({
             userId: this.userId,

@@ -13,6 +13,13 @@ import { tokenize } from "./text.js";
 export type MemoryType = "episodic" | "semantic" | "procedural";
 export type PrivacyLevel = "private" | "cross-context" | "public";
 
+/** 沒明寫隱私時的預設：semantic 是「關於這個人」的事實，跨場景才有意義；
+ *  episodic / procedural 留在原場景。工具寫入與萃取器共用同一條規則 — 分開寫過一次，
+ *  萃取出來的 semantic 全成了 private，辦公室講的偏好在家問不到。 */
+export function defaultPrivacy(memoryType: MemoryType): PrivacyLevel {
+  return memoryType === "semantic" ? "cross-context" : "private";
+}
+
 export interface MemoryInput {
   userId: string;
   context: string;
