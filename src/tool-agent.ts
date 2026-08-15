@@ -67,14 +67,24 @@ export function parseAction(raw: string): AgentAction | null {
     ) {
       return { action: "tool_call", tool: obj.tool, args: obj.args as Record<string, unknown> };
     }
-    // action 缺席時改由形狀推斷：部分開源模型（實測 Bedrock Gemma 4 31B）只吐
-    // {"tool":...,"args":{...}}，外層由 harness 補齊比要求模型改口可靠。
-    if (obj.action === undefined) {
-      if (typeof obj.tool === "string" && obj.args !== null && typeof obj.args === "object") {
-        return { action: "tool_call", tool: obj.tool, args: obj.args as Record<string, unknown> };
-      }
-      if (typeof obj.text === "string") return { action: "reply", text: obj.text };
+    // 外層不合規格時由形狀還原。實測 Bedrock Gemma 4 31B 三種變體：省略 action、
+    // 把工具名寫進 action、把 args 攤平在頂層。要求模型改口不可靠，harness 補齊才是保證。
+    const tool =
+      typeof obj.tool === "string"
+        ? obj.tool
+        : typeof obj.action === "string" && obj.action !== "reply" && obj.action !== "tool_call"
+          ? obj.action
+          : undefined;
+    if (tool) {
+      const args =
+        obj.args !== null && typeof obj.args === "object"
+          ? (obj.args as Record<string, unknown>)
+          : Object.fromEntries(
+              Object.entries(obj).filter(([k]) => k !== "action" && k !== "tool" && k !== "args"),
+            );
+      return { action: "tool_call", tool, args };
     }
+    if (typeof obj.text === "string") return { action: "reply", text: obj.text };
     return null;
   } catch {
     return null;
