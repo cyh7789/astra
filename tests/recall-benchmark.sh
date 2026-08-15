@@ -30,13 +30,15 @@ api scene '{"context":"office"}' >/dev/null; sleep 2
 api chat '{"message":"The deadline for Project Alpha moved to Friday, my boss confirmed."}' >/dev/null; sleep 5
 api chat '{"message":"I prefer my meeting notes in bullet points, never paragraphs."}' >/dev/null; sleep 5
 
-echo "--- recalling from HOME ---"
+echo "--- new conversation, recalling from HOME ---"
+# 開新對話（記憶保留）：同一串對話裡問，模型可以照抄前面的發言，量到的就不是記憶層
+api reset '{"scope":"conversation"}' >/dev/null; sleep 2
 api scene '{"context":"home"}' >/dev/null; sleep 3
+api chat '{"message":"Please respond in English from now on."}' >/dev/null; sleep 4
 
 # 題目|召回關鍵字(正則)×2|來源關鍵字(正則)×N
-# 判準紀律：關鍵字必須是「記憶存在才會出現」的字。題目自帶的詞（fuel、car）與 reset 重新
-# seed 的示範記憶（其中有一條加油提醒）都能讓模型不召回也答得像對的，所以不列入召回正則；
-# 來源正則只收完整場景片語，裸的 car / office / driving 一律不算。
+# 判準紀律：關鍵字必須是「記憶存在才會出現」的字。題目自帶的詞（fuel、car）模型照抄就綠，
+# 不列入召回正則；來源正則只收完整場景片語，裸的 car / office / driving 一律不算。
 CASES=(
 "Is there anything about my car I should handle?|tire|28 ?PSI|in the car|while.*driv|during your driv|on the drive"
 "Do I have any personal events this weekend?|birthday|rose|in the car|while.*driv|during your driv|on the drive"
