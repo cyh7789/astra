@@ -787,7 +787,7 @@ export function buildSessionPrompt(
         `- ${t.name}${t.sensitive ? " (safety-sensitive)" : t.readonly ? " (read-only)" : ""}: ${t.description}. args: ${t.argsSpec}`,
     ),
     '- recall_memory: Search your long-term memory. When the user asks about a personal fact that is not in the memory section, search first, then answer (rewrite any pronouns/references into a complete standalone query); if nothing is found, honestly say you don\'t know. args: {"query": "complete search sentence", "scope": "current"|"all"} (all = search across scenes; when citing cross-scene results, mention the source scene)',
-    '- save_memory: Explicitly save something the user asks you to remember (meeting notes, decisions, facts) as a self-contained sentence in the user\'s language. args: {"content": "the fact", "type": "episodic"|"semantic"|"procedural", "context": "driving"|"office"|"home"|"any", "importance": 0-1, "expiresInHours": number (optional)}',
+    '- save_memory: Explicitly save something the user asks you to remember (meeting notes, decisions, facts) as a self-contained sentence in the user\'s language. Use semantic for a condition that stays true until something changes it (a tire is low, a deadline moved), episodic only for something that happened at one moment. args: {"content": "the fact", "type": "episodic"|"semantic"|"procedural", "context": "driving"|"office"|"home"|"any", "importance": 0-1, "expiresInHours": number (optional)}',
   ].join("\n");
 
   const memoryBlock =

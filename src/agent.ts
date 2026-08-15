@@ -60,6 +60,7 @@ export function buildExtractionPrompt(context: string, now: Date): string {
     "Rules:",
     "- episodic = events, schedules, reminders (time-bound; set expiresInHours for reminders)",
     "- semantic = long-term facts, preferences, habits",
+    "- A condition that stays true until something changes it (a tire is low, the tank is nearly empty, a deadline moved to Friday) is semantic, not episodic — episodic is for something that happened at one moment",
     "- Write content as a self-contained fact sentence in the user's language (it must make sense read alone later)",
     "- Classify context by the memory's topic (a household matter mentioned in the car belongs to home) — it may differ from the current scene",
     "- Pure questions, small talk, and queries are not memories → return []",
