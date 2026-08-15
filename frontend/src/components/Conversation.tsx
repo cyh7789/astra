@@ -33,7 +33,7 @@ function AstraBubble({ children }: { children: React.ReactNode }) {
   );
 }
 
-/** 對話流 + free-text 輸入列（評審保底：不開麥克風也能玩）。 */
+/** 對話流 + free-text 輸入列。麥克風權限拿不到時仍可全程操作。 */
 export function Conversation({
   messages,
   busy,

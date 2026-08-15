@@ -41,7 +41,7 @@ export interface DeviceTool {
   description: string;
   argsSpec: string;
   sensitive?: boolean;
-  /** 只讀（QUERY）工具：查到 ≠ 能做 — prompt 標注用（VoxGuard QUERY/ACTION 分離） */
+  /** 只讀（QUERY）工具：查到 ≠ 能做 — prompt 標注用，與有副作用的 ACTION 工具分離 */
   readonly?: boolean;
   validate(args: Record<string, unknown>): string | null;
   execute(
@@ -55,7 +55,7 @@ function intIn(v: unknown, min: number, max: number): boolean {
 }
 
 /** mock 世界觀一致性：search_poi 樣板說建國路繞 3 分鐘，之後導航就得回 3 分鐘 —
- *  各 mock 各自為政會穿幫（7/5 阿毛實測：前一輪 3 分鐘、導航後變 24 分鐘）。 */
+ *  各 mock 各自為政會穿幫（實測：前一輪回 3 分鐘、導航後變 24 分鐘）。 */
 function mockEta(destination: string): number {
   if (destination.includes("建國路")) return 3;
   if (destination.includes("民族路")) return 7;

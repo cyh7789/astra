@@ -1,6 +1,6 @@
 import type { GeoStatus } from "../hooks/useGeo.js";
 
-/** 資料源面板：老實呈現哪些資料是真的、哪些是 mock（阿毛 7/5：誠實比假裝全真更能讓評審理解）。
+/** 資料源面板：老實呈現哪些資料是真的、哪些是 mock。標清楚邊界比假裝全真有用。
  *  - 可切的（weather/poi/nav）：有 GPS 才能開 live；手動關 = 強制 mock
  *  - 鎖定的：time 永遠真實、家電/車控永遠 mock（標注真實接口在哪 — Integration Boundary）
  */

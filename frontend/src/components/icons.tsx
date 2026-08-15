@@ -1,6 +1,6 @@
 import type { SVGProps } from "react";
 
-/** Lucide inline SVG（MIT）— 全面禁 emoji（7/5 阿毛定調）。
+/** Lucide inline SVG（MIT）— 全面禁 emoji。
  *  一律內嵌不走 CDN（部署 CSP/離線安全）。 */
 
 function svg(props: SVGProps<SVGSVGElement>, children: React.ReactNode, size = 14) {

@@ -33,7 +33,7 @@ export interface SessionOptions {
 }
 
 /** digest 只扛「聊到哪、剛決定什麼」的對話態；個人事實歸記憶層（§4.9 分工）。
- *  system prompt 一律英文（7/5 阿毛拍板：指令遵循較穩、評審可讀；輸出語言跟隨對話）。 */
+ *  system prompt 一律英文：指令遵循較穩，輸出語言跟隨對話。 */
 const CONDENSE_SYSTEM = [
   "You are a conversation condenser. Input: the previous summary, existing open items, and conversation lines about to be dropped from the window.",
   'Return exactly one JSON object: {"digest":"1-2 sentence updated summary","openThreads":["open item", ...]}',
@@ -72,11 +72,11 @@ interface LoopCtx {
   now: Date;
   /** 瀏覽器 GPS 等真實環境 — 查詢類工具打真 API 用 */
   env: ToolEnv;
-  /** 工具執行的即時回報 — demo UI 顯示過程，不然長回合看起來像卡死（阿毛 7/5） */
+  /** 工具執行的即時回報 — demo UI 顯示過程，不然長回合看起來像卡死 */
   onToolCall?: (tool: string, args: Record<string, unknown>, result: Record<string, unknown>) => void;
   floorNudged: boolean;
   calls: number;
-  /** 同輪已嘗試的 tool+args 簽名 — 重複呼叫地板（VoxGuard RepetitionGuard 移植） */
+  /** 同輪已嘗試的 tool+args 簽名 — 重複呼叫地板：同工具同參數第二次即攔下換路 */
   attempted: Set<string>;
   /** 外部查詢類工具的同輪次數 — 語意等價變體繞過簽名時的硬上限 */
   externalCalls: Map<string, number>;
@@ -364,7 +364,7 @@ export class ChatSession {
     for (let i = 1; i <= MAX_TURNS; i++) {
       ctx.calls++;
       // 時間戳放尾端、分鐘粒度：每輪資料不污染 prefix。本地時區 — toISOString 是 UTC，
-      // 模型會把「05:56」當真唸給使用者（7/5 阿毛實測）
+      // 實測：模型會把 UTC 的「05:56」當本地時間唸給使用者
       const raw = await llm.complete(
         system,
         [...working, `(Current time: ${formatLocalTime(now)})`].join("\n"),
@@ -378,7 +378,7 @@ export class ChatSession {
         continue;
       }
       if (action.action === "reply") {
-        // 行為地板（CAR-bench 經驗：prompt 是上限、harness 是下限）— 攔 reply 不是攔對話。
+        // 行為地板：prompt 是行為上限、harness 是下限 — 攔 reply 不是攔對話。
         // 人命地板每個 reply 都檢查、不受 nudge-once 節流（devin P0：跟敏感地板共用 bool 會讓
         // 命案路徑在敏感 nudge 花掉後 / 升級 strongLlm 後裸奔）。自然終止：打了 119 即通過。
         const hazard = hazardFloorNudge(message, toolCalls);

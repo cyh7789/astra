@@ -1,4 +1,4 @@
-/** Server 端語音轉文字 — 瀏覽器無關（Web Speech 只有正版 Chrome 能用，評審體驗不能賭）。
+/** Server 端語音轉文字 — 瀏覽器無關。Web Speech 只有正版 Chrome 有，不能賭使用者的瀏覽器。
  *  現階段走 Gemini 音訊理解（現有金鑰零部署）；AWS 帳號下來後換 AWS Transcribe，只動這個模組。 */
 
 export type Transcriber = (audio: Buffer, mimeType: string) => Promise<string>;

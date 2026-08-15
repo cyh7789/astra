@@ -9,7 +9,7 @@ import { TOOLS, toolsForContext } from "./tools.js";
 
 /** JSON 協議工具調用：不依賴原生 function calling，開源模型（Gemma）也能跑。
  *  可靠性靠 harness：schema 驗證、場景白名單、parse 重試、迴圈上限 —
- *  VoxGuard「架構決定下限」在記憶場景的重演。 */
+ *  架構決定行為下限：prompt 只是上限，harness 才是保證。 */
 
 export interface ToolAction {
   action: "tool_call";
