@@ -3,7 +3,7 @@
 One AI companion with one memory, across the car, the office, and home. Say something on the drive home and the assistant at home already knows it, and tells you where it heard it.
 
 **Live demo: https://astra.hcytlog.com** (no signup, each visitor gets an isolated memory space)
-**Demo video: https://youtu.be/Ot-E5jVTD9g**
+**Demo video: https://youtu.be/di8OHxfPgso**
 
 Built for the CockroachDB × AWS "Build with Agentic Memory" hackathon.
 
